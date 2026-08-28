@@ -1,0 +1,514 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FX Sentiment Dashboard</title>
+<style>
+  /* ── tokens ─────────────────────────────────────────────────────────────
+     Diverging pair blue<->red with a neutral gray midpoint: long vs short is
+     polarity, so it gets the diverging job, not categorical hues. Both poles
+     validated against both surfaces (CVD dE 21.6 light / 19.2 dark).        */
+  :root{
+    color-scheme: light;
+    --plane:#f9f9f7; --surface:#fcfcfb;
+    --ink:#0b0b0b; --ink-2:#52514e; --muted:#898781;
+    --grid:#e1e0d9; --baseline:#c3c2b7;
+    --long:#2a78d6; --short:#e34948; --mid:#f0efec;
+    --good:#006300; --bad:#d03b3b; --warn:#fab219;
+    --shadow:0 1px 2px rgba(11,11,11,.05);
+  }
+  @media (prefers-color-scheme: dark){
+    :root:where(:not([data-theme="light"])){
+      color-scheme: dark;
+      --plane:#0d0d0d; --surface:#1a1a19;
+      --ink:#fff; --ink-2:#c3c2b7; --muted:#898781;
+      --grid:#2c2c2a; --baseline:#383835;
+      --long:#3987e5; --short:#e66767; --mid:#383835;
+      --good:#0ca30c; --bad:#e66767; --warn:#fab219;
+      --shadow:none;
+    }
+  }
+  :root[data-theme="dark"]{
+    color-scheme: dark;
+    --plane:#0d0d0d; --surface:#1a1a19;
+    --ink:#fff; --ink-2:#c3c2b7; --muted:#898781;
+    --grid:#2c2c2a; --baseline:#383835;
+    --long:#3987e5; --short:#e66767; --mid:#383835;
+    --good:#0ca30c; --bad:#e66767; --warn:#fab219;
+    --shadow:none;
+  }
+
+  *{box-sizing:border-box}
+  body{
+    margin:0;padding:20px 18px 48px;background:var(--plane);color:var(--ink);
+    font:400 13px/1.45 -apple-system,"Segoe UI",Roboto,system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .page{max-width:1180px;margin:0 auto}
+  .num{font-variant-numeric:tabular-nums}
+
+  /* ── header ── */
+  header{display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap;margin-bottom:18px}
+  h1{font-size:19px;font-weight:600;margin:0;letter-spacing:-.2px}
+  .sub{font-size:11.5px;color:var(--muted);margin-top:3px}
+  .sub b{color:var(--ink-2);font-weight:500}
+  .themer{
+    margin-left:auto;font:inherit;font-size:11.5px;padding:6px 12px;cursor:pointer;
+    border:1px solid var(--grid);border-radius:6px;background:var(--surface);color:var(--ink-2);
+  }
+
+  /* ── cards ── */
+  .card{
+    background:var(--surface);border:1px solid var(--grid);border-radius:9px;
+    padding:15px 16px;box-shadow:var(--shadow);
+  }
+  h2{
+    font-size:11px;font-weight:600;letter-spacing:.7px;text-transform:uppercase;
+    color:var(--muted);margin:0 0 12px;
+  }
+  h2 span{text-transform:none;letter-spacing:0;font-weight:400}
+
+  /* ── KPI strip ── */
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}
+  .kpi .k{font-size:10px;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)}
+  .kpi .v{font-size:23px;font-weight:600;margin:5px 0 2px;letter-spacing:-.5px}
+  .kpi .d{font-size:11.5px;color:var(--ink-2)}
+  .kpi .d em{font-style:normal;font-weight:500}
+
+  /* ── two-column body ── */
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
+  @media (max-width:900px){
+    .cols,.kpis{grid-template-columns:1fr}
+  }
+
+  /* ── bars ─────────────────────────────────────────────────────────────
+     100% stacked: long share + short share of open interest. 2px surface
+     gap between the two fills, 4px rounded outer ends, <=24px thick.     */
+  .legend{display:flex;align-items:center;gap:14px;font-size:10.5px;color:var(--muted);margin-bottom:10px}
+  .legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+  .legend .sp{margin-left:auto}
+
+  .brow{display:grid;grid-template-columns:78px 1fr 74px;align-items:center;gap:9px;margin-bottom:7px;cursor:pointer}
+  .brow:hover .track{filter:brightness(1.06)}
+  .brow.on .sym{color:var(--ink);font-weight:600}
+  .sym{font-size:11.5px;color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .track{position:relative;display:flex;height:20px;gap:2px}
+  .track .l{background:var(--long);border-radius:4px 0 0 4px}
+  .track .s{background:var(--short);border-radius:0 4px 4px 0;flex:1}
+  .track .l,.track .s{display:flex;align-items:center;min-width:0}
+  .track .l span,.track .s span{
+    font-size:10px;font-weight:600;color:#fff;padding:0 6px;white-space:nowrap;
+  }
+  .track .s span{margin-left:auto}
+  .mid{position:absolute;left:calc(50% - .5px);top:-2px;bottom:-2px;width:1px;background:var(--baseline);z-index:2}
+  .bend{font-size:11px;text-align:right;color:var(--ink-2)}
+
+  /* ── detail ── */
+  .drow{display:grid;grid-template-columns:96px 1fr 96px;align-items:center;gap:9px;margin-bottom:9px}
+  .drow .who b{display:block;font-size:12px;font-weight:500}
+  .drow .who i{display:block;font-style:normal;font-size:9.5px;color:var(--muted)}
+  .drow .track{height:24px}
+  .dsep{border-top:1px dashed var(--baseline);margin:10px 0 9px}
+
+  .tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-top:13px}
+  .tile{border:1px solid var(--grid);border-radius:7px;padding:9px 11px;background:var(--plane)}
+  .tile.l{border-left:3px solid var(--long)}
+  .tile.r{border-left:3px solid var(--baseline)}
+  .tile.s{border-left:3px solid var(--short)}
+  .tile .k{font-size:9.5px;letter-spacing:.5px;text-transform:uppercase;color:var(--muted)}
+  .tile .v{font-size:17px;font-weight:600;margin:2px 0 1px}
+  .tile .d{font-size:10.5px}
+  .up{color:var(--good)} .down{color:var(--bad)}
+  .verdict{
+    margin-top:11px;font-size:11.5px;line-height:1.6;color:var(--ink-2);
+    padding:9px 11px;border-radius:6px;background:var(--plane);border:1px solid var(--grid);
+  }
+  .verdict b{color:var(--ink);font-weight:600}
+
+  /* ── controls ── */
+  .ctl{display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+  .ctl input{
+    font:inherit;font-size:12px;padding:5px 10px;border-radius:6px;
+    border:1px solid var(--grid);background:var(--plane);color:var(--ink);width:120px;
+  }
+  .chip{
+    font:inherit;font-size:11px;padding:4px 11px;border-radius:20px;cursor:pointer;
+    border:1px solid var(--grid);background:transparent;color:var(--ink-2);
+  }
+  .chip[aria-pressed="true"]{background:var(--ink);border-color:var(--ink);color:var(--surface)}
+
+  /* ── table ── */
+  .scroll{overflow-x:auto}
+  table{border-collapse:collapse;width:100%;font-size:11.5px}
+  th{
+    text-align:left;font-weight:600;color:var(--muted);font-size:9.5px;letter-spacing:.5px;
+    text-transform:uppercase;padding:0 9px 7px 0;border-bottom:1px solid var(--baseline);
+    white-space:nowrap;cursor:pointer;
+  }
+  th.n{text-align:right}
+  th:hover{color:var(--ink-2)}
+  td{padding:6px 9px 6px 0;border-bottom:1px solid var(--grid);white-space:nowrap}
+  td.n{text-align:right}
+  tbody tr{cursor:pointer}
+  tbody tr:hover{background:var(--plane)}
+  .tag{
+    display:inline-block;min-width:46px;text-align:center;padding:1px 7px;border-radius:3px;
+    color:#fff;font-size:10px;font-weight:600;
+  }
+
+  /* ── tooltip ── */
+  #tip{
+    position:fixed;pointer-events:none;z-index:99;opacity:0;transition:opacity .1s;
+    background:var(--ink);color:var(--surface);font-size:11px;line-height:1.5;
+    padding:7px 10px;border-radius:6px;max-width:250px;box-shadow:0 4px 14px rgba(0,0,0,.22);
+  }
+  #tip b{font-weight:600}
+  #tip .r{display:flex;justify-content:space-between;gap:14px}
+
+  .note{margin-top:16px;font-size:11px;line-height:1.65;color:var(--muted)}
+  .note b{color:var(--ink-2);font-weight:500}
+  .note code{font-family:ui-monospace,Menlo,monospace;font-size:10px;
+             background:var(--plane);border:1px solid var(--grid);padding:1px 4px;border-radius:3px}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header>
+    <div>
+      <h1>FX Retail Sentiment</h1>
+      <div class="sub" id="sub">—</div>
+    </div>
+    <button class="themer" id="themer">Toggle theme</button>
+  </header>
+
+  <div class="kpis" id="kpis"></div>
+
+  <div class="cols">
+    <section class="card">
+      <h2>Broker split <span id="detailSym"></span></h2>
+      <div id="detail"></div>
+    </section>
+
+    <section class="card">
+      <h2>Positioning by pair <span>— click to inspect</span></h2>
+      <div class="ctl">
+        <input id="q" placeholder="Filter…" autocomplete="off">
+        <button class="chip" data-sort="skew" aria-pressed="true">Most crowded</button>
+        <button class="chip" data-sort="long">Most long</button>
+        <button class="chip" data-sort="disagree">Disagreement</button>
+        <button class="chip" data-sort="name">A–Z</button>
+      </div>
+      <div class="legend">
+        <span><i style="background:var(--long)"></i>Long</span>
+        <span><i style="background:var(--short)"></i>Short</span>
+        <span class="sp">share of open interest · mean of sources</span>
+      </div>
+      <div id="bars"></div>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>All data <span>— every comparable pair, sortable</span></h2>
+    <div class="scroll">
+      <table>
+        <thead><tr>
+          <th data-k="s">Pair</th>
+          <th class="n" data-k="mfb">MyFxBook</th>
+          <th class="n" data-k="duk">Dukascopy</th>
+          <th class="n" data-k="mean">Mean long</th>
+          <th class="n" data-k="spread">Disagree</th>
+          <th data-k="skew">Crowd</th>
+          <th class="n" data-k="al">Avg long</th>
+          <th class="n" data-k="as">Avg short</th>
+          <th class="n" data-k="rate">Rate</th>
+          <th class="n" data-k="pnl">Crowd P&amp;L</th>
+          <th class="n" data-k="pos">Positions</th>
+        </tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+    <div class="note" id="note"></div>
+  </section>
+
+</div>
+<div id="tip"></div>
+
+<script id="payload" type="application/json">{"captured_utc":"2026-09-05T02:25:53Z","source_meta":{"MyFxBook":{"method":"volume-weighted lots"},"Dukascopy":{"method":"SWFX consumers"}},"symbols":{"0700.HKHKD":{"sources":[{"source":"Dukascopy","long_pct":71.56}],"coverage":1,"average_long_pct":71.56,"spread_pct":0.0,"positions":0},"1398.HKHKD":{"sources":[{"source":"Dukascopy","long_pct":74.34}],"coverage":1,"average_long_pct":74.34,"spread_pct":0.0,"positions":0},"1810.HKHKD":{"sources":[{"source":"Dukascopy","long_pct":70.11}],"coverage":1,"average_long_pct":70.11,"spread_pct":0.0,"positions":0},"2007.HKHKD":{"sources":[{"source":"Dukascopy","long_pct":70.75}],"coverage":1,"average_long_pct":70.75,"spread_pct":0.0,"positions":0},"2503.JPJPY":{"sources":[{"source":"Dukascopy","long_pct":50.0}],"coverage":1,"average_long_pct":50.0,"spread_pct":0.0,"positions":0},"3382.JPJPY":{"sources":[{"source":"Dukascopy","long_pct":73.53}],"coverage":1,"average_long_pct":73.53,"spread_pct":0.0,"positions":0},"6758.JPJPY":{"sources":[{"source":"Dukascopy","long_pct":71.09}],"coverage":1,"average_long_pct":71.09,"spread_pct":0.0,"positions":0},"7203.JPJPY":{"sources":[{"source":"Dukascopy","long_pct":74.87}],"coverage":1,"average_long_pct":74.87,"spread_pct":0.0,"positions":0},"9984.JPJPY":{"sources":[{"source":"Dukascopy","long_pct":72.13}],"coverage":1,"average_long_pct":72.13,"spread_pct":0.0,"positions":0},"AAPL.USUSD":{"sources":[{"source":"Dukascopy","long_pct":72.78}],"coverage":1,"average_long_pct":72.78,"spread_pct":0.0,"positions":0},"ADAUSD":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":11,"lots":0.4},{"source":"Dukascopy","long_pct":74.13}],"coverage":2,"average_long_pct":87.06,"spread_pct":25.87,"positions":11,"prices":{"avg_long_price":0.3682,"avg_short_price":0.0,"rate":0.21,"decimals":2,"long_pips":-15.8,"short_pips":null,"long_move_pct":-42.966,"short_move_pct":null,"source":"MyFxBook"}},"ADBE.USUSD":{"sources":[{"source":"Dukascopy","long_pct":70.61}],"coverage":1,"average_long_pct":70.61,"spread_pct":0.0,"positions":0},"AF.FREUR":{"sources":[{"source":"Dukascopy","long_pct":50.09}],"coverage":1,"average_long_pct":50.09,"spread_pct":0.0,"positions":0},"AI.FREUR":{"sources":[{"source":"Dukascopy","long_pct":71.09}],"coverage":1,"average_long_pct":71.09,"spread_pct":0.0,"positions":0},"AIR.FREUR":{"sources":[{"source":"Dukascopy","long_pct":70.4}],"coverage":1,"average_long_pct":70.4,"spread_pct":0.0,"positions":0},"ALB.USUSD":{"sources":[{"source":"Dukascopy","long_pct":71.14}],"coverage":1,"average_long_pct":71.14,"spread_pct":0.0,"positions":0},"ALLE.USUSD":{"sources":[{"source":"Dukascopy","long_pct":71.86}],"coverage":1,"average_long_pct":71.86,"spread_pct":0.0,"positions":0},"ALV.DEEUR":{"sources":[{"source":"Dukascopy","long_pct":71.33}],"coverage":1,"average_long_pct":71.33,"spread_pct":0.0,"positions":0},"AMAT.USUSD":{"sources":[{"source":"Dukascopy","long_pct":70.9}],"coverage":1,"average_long_pct":70.9,"spread_pct":0.0,"positions":0},"AMCR.USUSD":{"sources":[{"source":"Dukascopy","long_pct":70.06}],"coverage":1,"average_long_pct":70.06,"spread_pct":0.0,"positions":0},"AMD.USUSD":{"sources":[{"source":"Dukascopy","long_pct":71.11}],"coverage":1,"average_long_pct":71.11,"spread_pct":0.0,"positions":0},"AMGN.USUSD":{"sources":[{"source":"Dukascopy","long_pct":73.4}],"coverage":1,"average_long_pct":73.4,"spread_pct":0.0,"positions":0},"AMZN.USUSD":{"sources":[{"source":"Dukascopy","long_pct":73.5}],"coverage":1,"average_long_pct":73.5,"spread_pct":0.0,"positions":0},"AON.USUSD":{"sources":[{"source":"Dukascopy","long_pct":70.0}],"coverage":1,"average_long_pct":70.0,"spread_pct":0.0,"positions":0},"AOS.USUSD":{"sources":[{"source":"Dukascopy","long_pct":70.67}],"coverage":1,"average_long_pct":70.67,"spread_pct":0.0,"positions":0},"ARKI.USUSD":{"sources":[{"source":"Dukascopy","long_pct":73.57}],"coverage":1,"average_long_pct":73.57,"spread_pct":0.0,"positions":0},"ASML.NLEUR":{"sources":[{"source":"Dukascopy","long_pct":74.56}],"coverage":1,"average_long_pct":74.56,"spread_pct":0.0,"positions":0},"AUDCAD":{"sources":[{"source":"Dukascopy","long_pct":28.81},{"source":"MyFxBook","long_pct":14.84,"positions":25116,"lots":7172.23}],"coverage":2,"average_long_pct":21.82,"spread_pct":13.97,"positions":25116,"prices":{"avg_long_price":0.9858,"avg_short_price":0.9598,"rate":0.99643,"decimals":5,"long_pips":106.3,"short_pips":-366.3,"long_move_pct":1.078,"short_move_pct":-3.816,"source":"MyFxBook"}},"AUDCHF":{"sources":[{"source":"Dukascopy","long_pct":52.88},{"source":"MyFxBook","long_pct":2.66,"positions":4611,"lots":1925.32}],"coverage":2,"average_long_pct":27.77,"spread_pct":50.22,"positions":4611,"prices":{"avg_long_price":0.5867,"avg_short_price":0.5703,"rate":0.5833,"decimals":5,"long_pips":-34.0,"short_pips":-130.0,"long_move_pct":-0.58,"short_move_pct":-2.28,"source":"MyFxBook"}},"AUDJPY":{"sources":[{"source":"MyFxBook","long_pct":45.26,"positions":3078,"lots":663.8},{"source":"Dukascopy","long_pct":25.39}],"coverage":2,"average_long_pct":35.33,"spread_pct":19.87,"positions":3078,"prices":{"avg_long_price":113.109,"avg_short_price":107.2933,"rate":112.52,"decimals":3,"long_pips":-58.9,"short_pips":-522.7,"long_move_pct":-0.521,"short_move_pct":-4.871,"source":"MyFxBook"}},"AUDNZD":{"sources":[{"source":"Dukascopy","long_pct":28.78},{"source":"MyFxBook","long_pct":7.67,"positions":21486,"lots":6619.36}],"coverage":2,"average_long_pct":18.23,"spread_pct":21.11,"positions":21486,"prices":{"avg_long_price":1.2077,"avg_short_price":1.1903,"rate":1.2239,"decimals":5,"long_pips":162.0,"short_pips":-336.0,"long_move_pct":1.341,"short_move_pct":-2.823,"source":"MyFxBook"}},"AUDSGD":{"sources":[{"source":"Dukascopy","long_pct":53.37},{"source":"MyFxBook","long_pct":39.26,"positions":186,"lots":5.12}],"coverage":2,"average_long_pct":46.31,"spread_pct":14.11,"positions":186,"prices":{"avg_long_price":0.9096,"avg_short_price":0.8975,"rate":0.91141,"decimals":5,"long_pips":18.1,"short_pips":-139.1,"long_move_pct":0.199,"short_move_pct":-1.55,"source":"MyFxBook"}},"AUDUSD":{"sources":[{"source":"Dukascopy","long_pct":25.76},{"source":"MyFxBook","long_pct":10.02,"positions":9132,"lots":2758.73}],"coverage":2,"average_long_pct":17.89,"spread_pct":15.74,"positions":9132,"prices":{"avg_long_price":0.7132,"avg_short_price":0.6963,"rate":0.7201,"decimals":5,"long_pips":69.0,"short_pips":-238.0,"long_move_pct":0.967,"short_move_pct":-3.418,"source":"MyFxBook"}},"AUS.IDXAUD":{"sources":[{"source":"Dukascopy","long_pct":73.37}],"coverage":1,"average_long_pct":73.37,"spread_pct":0.0,"positions":0},"AVEUSD":{"sources":[{"source":"Dukascopy","long_pct":72.09}],"coverage":1,"average_long_pct":72.09,"spread_pct":0.0,"positions":0},"AVGO.USUSD":{"sources":[{"source":"Dukascopy","long_pct":73.3}],"coverage":1,"average_long_pct":73.3,"spread_pct":0.0,"positions":0},"AXP.USUSD":{"sources":[{"source":"Dukascopy","long_pct":70.08}],"coverage":1,"average_long_pct":70.08,"spread_pct":0.0,"positions":0},"AXSUSD":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":6,"lots":0.35}],"coverage":1,"average_long_pct":100.0,"spread_pct":0.0,"positions":6,"prices":{"avg_long_price":3.8333,"avg_short_price":0.0,"rate":1.0,"decimals":5,"long_pips":-2.8,"short_pips":null,"long_move_pct":-73.913,"short_move_pct":null,"source":"MyFxBook"}},"BABA.USUSD":{"sources":[{"source":"Dukascopy","long_pct":72.53}],"coverage":1,"average_long_pct":72.53,"spread_pct":0.0,"positions":0},"BAC.USUSD":{"sources":[{"source":"Dukascopy","long_pct":72.25}],"coverage":1,"average_long_pct":72.25,"spread_pct":0.0,"positions":0},"BAH.USUSD":{"sources":[{"source":"Dukascopy","long_pct":70.97}],"coverage":1,"average_long_pct":70.97,"spread_pct":0.0,"positions":0},"BAS.DEEUR":{"sources":[{"source":"Dukascopy","long_pct":48.62}],"coverage":1,"average_long_pct":48.62,"spread_pct":0.0,"positions":0},"BATS.GBGBX":{"sources":[{"source":"Dukascopy","long_pct":70.07}],"coverage":1,"average_long_pct":70.07,"spread_pct":0.0,"positions":0},"BATUSD":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":3,"lots":0.15},{"source":"Dukascopy","long_pct":66.67}],"coverage":2,"average_long_pct":83.34,"spread_pct":33.33,"positions":3,"prices":{"avg_long_price":0.0,"avg_short_price":0.0,"rate":0.0,"decimals":5,"long_pips":null,"short_pips":null,"long_move_pct":null,"short_move_pct":null,"source":"MyFxBook"}},"BAYN.DEEUR":{"sources":[{"source":"Dukascopy","long_pct":74.13}],"coverage":1,"average_long_pct":74.13,"spread_pct":0.0,"positions":0},"BCHCHF":{"sources":[{"source":"Dukascopy","long_pct":73.01}],"coverage":1,"average_long_pct":73.01,"spread_pct":0.0,"positions":0},"BCHUSD":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":2,"lots":1.01},{"source":"Dukascopy","long_pct":70.76}],"coverage":2,"average_long_pct":85.38,"spread_pct":29.24,"positions":2,"prices":{"avg_long_price":445.025,"avg_short_price":0.0,"rate":246.55,"decimals":2,"long_pips":-19847.5,"short_pips":null,"long_move_pct":-44.599,"short_move_pct":null,"source":"MyFxBook"}},"BKR.USUSD":{"sources":[{"source":"Dukascopy","long_pct":27.03}],"coverage":1,"average_long_pct":27.03,"spread_pct":0.0,"positions":0},"BMW.DEEUR":{"sources":[{"source":"Dukascopy","long_pct":73.38}],"coverage":1,"average_long_pct":73.38,"spread_pct":0.0,"positions":0},"BNTUSD":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":1,"lots":0.3}],"coverage":1,"average_long_pct":100.0,"spread_pct":0.0,"positions":1,"prices":{"avg_long_price":0.0,"avg_short_price":0.0,"rate":0.0,"decimals":5,"long_pips":null,"short_pips":null,"long_move_pct":null,"short_move_pct":null,"source":"MyFxBook"}},"BRENT.CMDUSD":{"sources":[{"source":"Dukascopy","long_pct":26.51}],"coverage":1,"average_long_pct":26.51,"spread_pct":0.0,"positions":0},"BRKB.USUSD":{"sources":[{"source":"Dukascopy","long_pct":71.62}],"coverage":1,"average_long_pct":71.62,"spread_pct":0.0,"positions":0},"BTCCHF":{"sources":[{"source":"Dukascopy","long_pct":72.55}],"coverage":1,"average_long_pct":72.55,"spread_pct":0.0,"positions":0},"BTCEUR":{"sources":[{"source":"Dukascopy","long_pct":70.76},{"source":"MyFxBook","long_pct":0.0,"positions":1,"lots":0.01}],"coverage":2,"average_long_pct":35.38,"spread_pct":70.76,"positions":1,"prices":{"avg_long_price":0.0,"avg_short_price":68037.9,"rate":68564.33,"decimals":2,"long_pips":null,"short_pips":-52643.0,"long_move_pct":null,"short_move_pct":-0.774,"source":"MyFxBook"}},"BTCGBP":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":1,"lots":0.01}],"coverage":1,"average_long_pct":100.0,"spread_pct":0.0,"positions":1,"prices":{"avg_long_price":52169.93,"avg_short_price":0.0,"rate":58912.5,"decimals":2,"long_pips":674257.0,"short_pips":null,"long_move_pct":12.924,"short_move_pct":null,"source":"MyFxBook"}},"BTCJPY":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":2,"lots":0.02}],"coverage":1,"average_long_pct":100.0,"spread_pct":0.0,"positions":2,"prices":{"avg_long_price":12548689.5,"avg_short_price":0.0,"rate":12414721.0,"decimals":2,"long_pips":-13396850.0,"short_pips":null,"long_move_pct":-1.068,"short_move_pct":null,"source":"MyFxBook"}},"BTCUSD":{"sources":[{"source":"MyFxBook","long_pct":55.02,"positions":1658,"lots":391.15},{"source":"Dukascopy","long_pct":43.21}],"coverage":2,"average_long_pct":49.12,"spread_pct":11.81,"positions":1658,"prices":{"avg_long_price":86485.9299,"avg_short_price":72971.2926,"rate":79601.0,"decimals":5,"long_pips":-6884.9,"short_pips":-6629.7,"long_move_pct":-7.961,"short_move_pct":-9.085,"source":"MyFxBook"}},"BUND.TREUR":{"sources":[{"source":"Dukascopy","long_pct":74.12}],"coverage":1,"average_long_pct":74.12,"spread_pct":0.0,"positions":0},"CADCHF":{"sources":[{"source":"Dukascopy","long_pct":58.52},{"source":"MyFxBook","long_pct":54.19,"positions":5311,"lots":710.31}],"coverage":2,"average_long_pct":56.36,"spread_pct":4.33,"positions":5311,"prices":{"avg_long_price":0.6207,"avg_short_price":0.581,"rate":0.5848,"decimals":5,"long_pips":-359.0,"short_pips":-38.0,"long_move_pct":-5.784,"short_move_pct":-0.654,"source":"MyFxBook"}},"CADJPY":{"sources":[{"source":"MyFxBook","long_pct":81.46,"positions":1644,"lots":347.05},{"source":"Dukascopy","long_pct":72.52}],"coverage":2,"average_long_pct":76.99,"spread_pct":8.94,"positions":1644,"prices":{"avg_long_price":113.8462,"avg_short_price":108.8887,"rate":112.914,"decimals":3,"long_pips":-93.2,"short_pips":-402.5,"long_move_pct":-0.819,"short_move_pct":-3.697,"source":"MyFxBook"}},"CADNOK":{"sources":[{"source":"Dukascopy","long_pct":37.5}],"coverage":1,"average_long_pct":37.5,"spread_pct":0.0,"positions":0},"CADSGD":{"sources":[{"source":"Dukascopy","long_pct":73.04}],"coverage":1,"average_long_pct":73.04,"spread_pct":0.0,"positions":0},"CAP.FREUR":{"sources":[{"source":"Dukascopy","long_pct":73.54}],"coverage":1,"average_long_pct":73.54,"spread_pct":0.0,"positions":0},"CBK.DEEUR":{"sources":[{"source":"Dukascopy","long_pct":73.69}],"coverage":1,"average_long_pct":73.69,"spread_pct":0.0,"positions":0},"CCL.USUSD":{"sources":[{"source":"Dukascopy","long_pct":72.98}],"coverage":1,"average_long_pct":72.98,"spread_pct":0.0,"positions":0},"CDW.USUSD":{"sources":[{"source":"Dukascopy","long_pct":71.59}],"coverage":1,"average_long_pct":71.59,"spread_pct":0.0,"positions":0},"CGNX.USUSD":{"sources":[{"source":"Dukascopy","long_pct":73.14}],"coverage":1,"average_long_pct":73.14,"spread_pct":0.0,"positions":0},"CHE.IDXCHF":{"sources":[{"source":"Dukascopy","long_pct":70.09}],"coverage":1,"average_long_pct":70.09,"spread_pct":0.0,"positions":0},"CHFCZK":{"sources":[{"source":"Dukascopy","long_pct":29.82}],"coverage":1,"average_long_pct":29.82,"spread_pct":0.0,"positions":0},"CHFHUF":{"sources":[{"source":"Dukascopy","long_pct":29.89}],"coverage":1,"average_long_pct":29.89,"spread_pct":0.0,"positions":0},"CHFJPY":{"sources":[{"source":"MyFxBook","long_pct":84.24,"positions":3422,"lots":792.14},{"source":"Dukascopy","long_pct":29.94}],"coverage":2,"average_long_pct":57.09,"spread_pct":54.3,"positions":3422,"prices":{"avg_long_price":195.3652,"avg_short_price":177.3505,"rate":192.889,"decimals":3,"long_pips":-247.6,"short_pips":-1553.8,"long_move_pct":-1.267,"short_move_pct":-8.761,"source":"MyFxBook"}},"CHFMXN":{"sources":[{"source":"Dukascopy","long_pct":28.63}],"coverage":1,"average_long_pct":28.63,"spread_pct":0.0,"positions":0},"CHFPLN":{"sources":[{"source":"Dukascopy","long_pct":72.1}],"coverage":1,"average_long_pct":72.1,"spread_pct":0.0,"positions":0},"CHFSGD":{"sources":[{"source":"Dukascopy","long_pct":43.56},{"source":"MyFxBook","long_pct":28.88,"positions":45,"lots":2.32}],"coverage":2,"average_long_pct":36.22,"spread_pct":14.68,"positions":45,"prices":{"avg_long_price":1.5953,"avg_short_price":1.5651,"rate":1.56167,"decimals":5,"long_pips":-336.3,"short_pips":34.3,"long_move_pct":-2.108,"short_move_pct":0.219,"source":"MyFxBook"}},"CHFTRY":{"sources":[{"source":"Dukascopy","long_pct":26.33}],"coverage":1,"average_long_pct":26.33,"spread_pct":0.0,"positions":0},"CHI.IDXUSD":{"sources":[{"source":"Dukascopy","long_pct":70.23}],"coverage":1,"average_long_pct":70.23,"spread_pct":0.0,"positions":0},"CHZUSD":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":1,"lots":0.01}],"coverage":1,"average_long_pct":100.0,"spread_pct":0.0,"positions":1,"prices":{"avg_long_price":0.0,"avg_short_price":0.0,"rate":0.0,"decimals":5,"long_pips":null,"short_pips":null,"long_move_pct":null,"short_move_pct":null,"source":"MyFxBook"}},"COCOA.CMDUSD":{"sources":[{"source":"Dukascopy","long_pct":74.45}],"coverage":1,"average_long_pct":74.45,"spread_pct":0.0,"positions":0},"COFFEE.CMDUSX":{"sources":[{"source":"Dukascopy","long_pct":70.89}],"coverage":1,"average_long_pct":70.89,"spread_pct":0.0,"positions":0},"COPPER.CMDUSD":{"sources":[{"source":"Dukascopy","long_pct":43.12}],"coverage":1,"average_long_pct":43.12,"spread_pct":0.0,"positions":0},"COTTON.CMDUSX":{"sources":[{"source":"Dukascopy","long_pct":71.19}],"coverage":1,"average_long_pct":71.19,"spread_pct":0.0,"positions":0},"CPI.GBGBX":{"sources":[{"source":"Dukascopy","long_pct":60.0}],"coverage":1,"average_long_pct":60.0,"spread_pct":0.0,"positions":0},"CPT.USUSD":{"sources":[{"source":"Dukascopy","long_pct":73.59}],"coverage":1,"average_long_pct":73.59,"spread_pct":0.0,"positions":0},"CRVUSD":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":2,"lots":4.02}],"coverage":1,"average_long_pct":100.0,"spread_pct":0.0,"positions":2,"prices":{"avg_long_price":0.0,"avg_short_price":0.0,"rate":0.0,"decimals":5,"long_pips":null,"short_pips":null,"long_move_pct":null,"short_move_pct":null,"source":"MyFxBook"}},"CSCO.USUSD":{"sources":[{"source":"Dukascopy","long_pct":74.52}],"coverage":1,"average_long_pct":74.52,"spread_pct":0.0,"positions":0},"CVX.USUSD":{"sources":[{"source":"Dukascopy","long_pct":71.9}],"coverage":1,"average_long_pct":71.9,"spread_pct":0.0,"positions":0},"DEU.IDXEUR":{"sources":[{"source":"Dukascopy","long_pct":27.09}],"coverage":1,"average_long_pct":27.09,"spread_pct":0.0,"positions":0},"DFNG.GBGBP":{"sources":[{"source":"Dukascopy","long_pct":74.21}],"coverage":1,"average_long_pct":74.21,"spread_pct":0.0,"positions":0},"DIA.USUSD":{"sources":[{"source":"Dukascopy","long_pct":72.69}],"coverage":1,"average_long_pct":72.69,"spread_pct":0.0,"positions":0},"DIESEL.CMDUSD":{"sources":[{"source":"Dukascopy","long_pct":33.5}],"coverage":1,"average_long_pct":33.5,"spread_pct":0.0,"positions":0},"DIS.USUSD":{"sources":[{"source":"Dukascopy","long_pct":74.95}],"coverage":1,"average_long_pct":74.95,"spread_pct":0.0,"positions":0},"DOLLAR.IDXUSD":{"sources":[{"source":"Dukascopy","long_pct":25.05}],"coverage":1,"average_long_pct":25.05,"spread_pct":0.0,"positions":0},"DOTUSD":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":9,"lots":0.92}],"coverage":1,"average_long_pct":100.0,"spread_pct":0.0,"positions":9,"prices":{"avg_long_price":2.9373,"avg_short_price":0.0,"rate":0.899,"decimals":3,"long_pips":-203.8,"short_pips":null,"long_move_pct":-69.394,"short_move_pct":null,"source":"MyFxBook"}},"DSB.FREUR":{"sources":[{"source":"Dukascopy","long_pct":73.26}],"coverage":1,"average_long_pct":73.26,"spread_pct":0.0,"positions":0},"DSHUSD":{"sources":[{"source":"MyFxBook","long_pct":98.04,"positions":2,"lots":0.51},{"source":"Dukascopy","long_pct":72.62}],"coverage":2,"average_long_pct":85.33,"spread_pct":25.42,"positions":2,"prices":{"avg_long_price":31.4,"avg_short_price":44.35,"rate":67.03,"decimals":2,"long_pips":3563.0,"short_pips":-2268.0,"long_move_pct":113.471,"short_move_pct":-51.139,"source":"MyFxBook"}},"DUK.USUSD":{"sources":[{"source":"Dukascopy","long_pct":73.08}],"coverage":1,"average_long_pct":73.08,"spread_pct":0.0,"positions":0},"DVN.USUSD":{"sources":[{"source":"Dukascopy","long_pct":70.39}],"coverage":1,"average_long_pct":70.39,"spread_pct":0.0,"positions":0},"DVY.USUSD":{"sources":[{"source":"Dukascopy","long_pct":72.39}],"coverage":1,"average_long_pct":72.39,"spread_pct":0.0,"positions":0},"EEM.USUSD":{"sources":[{"source":"Dukascopy","long_pct":71.08}],"coverage":1,"average_long_pct":71.08,"spread_pct":0.0,"positions":0},"EMB.USUSD":{"sources":[{"source":"Dukascopy","long_pct":70.95}],"coverage":1,"average_long_pct":70.95,"spread_pct":0.0,"positions":0},"ENJUSD":{"sources":[{"source":"MyFxBook","long_pct":0.0,"positions":1,"lots":0.01}],"coverage":1,"average_long_pct":0.0,"spread_pct":0.0,"positions":1,"prices":{"avg_long_price":0.0,"avg_short_price":0.0,"rate":0.0,"decimals":5,"long_pips":null,"short_pips":null,"long_move_pct":null,"short_move_pct":null,"source":"MyFxBook"}},"ENPH.USUSD":{"sources":[{"source":"Dukascopy","long_pct":73.89}],"coverage":1,"average_long_pct":73.89,"spread_pct":0.0,"positions":0},"EOSUSD":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":2,"lots":1.0}],"coverage":1,"average_long_pct":100.0,"spread_pct":0.0,"positions":2,"prices":{"avg_long_price":0.87,"avg_short_price":0.0,"rate":0.05,"decimals":2,"long_pips":-82.0,"short_pips":null,"long_move_pct":-94.253,"short_move_pct":null,"source":"MyFxBook"}},"EPAM.USUSD":{"sources":[{"source":"Dukascopy","long_pct":72.82}],"coverage":1,"average_long_pct":72.82,"spread_pct":0.0,"positions":0},"ERICB.SESEK":{"sources":[{"source":"Dukascopy","long_pct":74.88}],"coverage":1,"average_long_pct":74.88,"spread_pct":0.0,"positions":0},"ESP.IDXEUR":{"sources":[{"source":"Dukascopy","long_pct":50.0}],"coverage":1,"average_long_pct":50.0,"spread_pct":0.0,"positions":0},"ETCUSD":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":1,"lots":1.0}],"coverage":1,"average_long_pct":100.0,"spread_pct":0.0,"positions":1,"prices":{"avg_long_price":13.34,"avg_short_price":0.0,"rate":7.55,"decimals":2,"long_pips":-579.0,"short_pips":null,"long_move_pct":-43.403,"short_move_pct":null,"source":"MyFxBook"}},"ETHUSD":{"sources":[{"source":"MyFxBook","long_pct":85.49,"positions":1260,"lots":323.5},{"source":"Dukascopy","long_pct":70.95}],"coverage":2,"average_long_pct":78.22,"spread_pct":14.54,"positions":1260,"prices":{"avg_long_price":3059.636,"avg_short_price":2064.7285,"rate":2453.32,"decimals":2,"long_pips":-60631.6,"short_pips":-38859.2,"long_move_pct":-19.817,"short_move_pct":-18.82,"source":"MyFxBook"}},"EURAED":{"sources":[{"source":"Dukascopy","long_pct":26.57}],"coverage":1,"average_long_pct":26.57,"spread_pct":0.0,"positions":0},"EURAUD":{"sources":[{"source":"MyFxBook","long_pct":89.04,"positions":4902,"lots":1243.57},{"source":"Dukascopy","long_pct":39.55}],"coverage":2,"average_long_pct":64.3,"spread_pct":49.49,"positions":4902,"prices":{"avg_long_price":1.6493,"avg_short_price":1.6088,"rate":1.61223,"decimals":5,"long_pips":-370.7,"short_pips":-34.3,"long_move_pct":-2.248,"short_move_pct":-0.213,"source":"MyFxBook"}},"EURCAD":{"sources":[{"source":"MyFxBook","long_pct":61.41,"positions":3828,"lots":920.28},{"source":"Dukascopy","long_pct":29.59}],"coverage":2,"average_long_pct":45.5,"spread_pct":31.82,"positions":3828,"prices":{"avg_long_price":1.6147,"avg_short_price":1.5816,"rate":1.6064,"decimals":5,"long_pips":-83.0,"short_pips":-248.0,"long_move_pct":-0.514,"short_move_pct":-1.568,"source":"MyFxBook"}},"EURCHF":{"sources":[{"source":"Dukascopy","long_pct":56.67},{"source":"MyFxBook","long_pct":12.37,"positions":5239,"lots":1046.33}],"coverage":2,"average_long_pct":34.52,"spread_pct":44.3,"positions":5239,"prices":{"avg_long_price":0.9558,"avg_short_price":0.9302,"rate":0.9405,"decimals":5,"long_pips":-153.0,"short_pips":-103.0,"long_move_pct":-1.601,"short_move_pct":-1.107,"source":"MyFxBook"}},"EURCZK":{"sources":[{"source":"MyFxBook","long_pct":33.33,"positions":30,"lots":0.3},{"source":"Dukascopy","long_pct":27.57}],"coverage":2,"average_long_pct":30.45,"spread_pct":5.76,"positions":30,"prices":{"avg_long_price":24.1664,"avg_short_price":24.1273,"rate":24.1812,"decimals":5,"long_pips":148.0,"short_pips":-539.0,"long_move_pct":0.061,"short_move_pct":-0.223,"source":"MyFxBook"}},"EURGBP":{"sources":[{"source":"Dukascopy","long_pct":62.13},{"source":"MyFxBook","long_pct":26.09,"positions":7372,"lots":1461.56}],"coverage":2,"average_long_pct":44.11,"spread_pct":36.04,"positions":7372,"prices":{"avg_long_price":0.8613,"avg_short_price":0.855,"rate":0.859,"decimals":5,"long_pips":-23.0,"short_pips":-40.0,"long_move_pct":-0.267,"short_move_pct":-0.468,"source":"MyFxBook"}},"EURHUF":{"sources":[{"source":"Dukascopy","long_pct":70.63},{"source":"MyFxBook","long_pct":4.49,"positions":22,"lots":2.45}],"coverage":2,"average_long_pct":37.56,"spread_pct":66.14,"positions":22,"prices":{"avg_long_price":367.1921,"avg_short_price":361.0785,"rate":362.05,"decimals":3,"long_pips":-514.2,"short_pips":-97.1,"long_move_pct":-1.4,"short_move_pct":-0.269,"source":"MyFxBook"}},"EURILS":{"sources":[{"source":"Dukascopy","long_pct":73.67}],"coverage":1,"average_long_pct":73.67,"spread_pct":0.0,"positions":0},"EURJPY":{"sources":[{"source":"Dukascopy","long_pct":74.57},{"source":"MyFxBook","long_pct":65.87,"positions":5255,"lots":1706.82}],"coverage":2,"average_long_pct":70.22,"spread_pct":8.7,"positions":5255,"prices":{"avg_long_price":182.8453,"avg_short_price":172.2992,"rate":181.47,"decimals":3,"long_pips":-137.5,"short_pips":-917.1,"long_move_pct":-0.752,"short_move_pct":-5.323,"source":"MyFxBook"}},"EURMXN":{"sources":[{"source":"Dukascopy","long_pct":26.75},{"source":"MyFxBook","long_pct":0.0,"positions":20,"lots":1.67}],"coverage":2,"average_long_pct":13.38,"spread_pct":26.75,"positions":20,"prices":{"avg_long_price":0.0,"avg_short_price":20.3235,"rate":19.6105,"decimals":5,"long_pips":null,"short_pips":7130.0,"long_move_pct":null,"short_move_pct":3.508,"source":"MyFxBook"}},"EURNOK":{"sources":[{"source":"MyFxBook","long_pct":93.75,"positions":9,"lots":0.32},{"source":"Dukascopy","long_pct":27.35}],"coverage":2,"average_long_pct":60.55,"spread_pct":66.4,"positions":9,"prices":{"avg_long_price":10.8599,"avg_short_price":9.45,"rate":10.8085,"decimals":5,"long_pips":-514.0,"short_pips":-13585.0,"long_move_pct":-0.473,"short_move_pct":-14.376,"source":"MyFxBook"}},"EURNZD":{"sources":[{"source":"MyFxBook","long_pct":43.86,"positions":2496,"lots":327.01},{"source":"Dukascopy","long_pct":29.47}],"coverage":2,"average_long_pct":36.66,"spread_pct":14.39,"positions":2496,"prices":{"avg_long_price":1.9966,"avg_short_price":1.8839,"rate":1.9736,"decimals":5,"long_pips":-230.0,"short_pips":-897.0,"long_move_pct":-1.152,"short_move_pct":-4.761,"source":"MyFxBook"}},"EURPLN":{"sources":[{"source":"Dukascopy","long_pct":27.88},{"source":"MyFxBook","long_pct":0.46,"positions":33,"lots":4.33}],"coverage":2,"average_long_pct":14.17,"spread_pct":27.42,"positions":33,"prices":{"avg_long_price":4.3258,"avg_short_price":4.2426,"rate":4.3108,"decimals":5,"long_pips":-150.0,"short_pips":-682.0,"long_move_pct":-0.347,"short_move_pct":-1.608,"source":"MyFxBook"}},"EURSEK":{"sources":[{"source":"MyFxBook","long_pct":92.31,"positions":11,"lots":0.13},{"source":"Dukascopy","long_pct":44.4}],"coverage":2,"average_long_pct":68.36,"spread_pct":47.91,"positions":11,"prices":{"avg_long_price":11.0872,"avg_short_price":10.8761,"rate":11.1086,"decimals":5,"long_pips":214.0,"short_pips":-2325.0,"long_move_pct":0.193,"short_move_pct":-2.138,"source":"MyFxBook"}},"EURSGD":{"sources":[{"source":"MyFxBook","long_pct":53.04,"positions":350,"lots":17.61},{"source":"Dukascopy","long_pct":28.25}],"coverage":2,"average_long_pct":40.64,"spread_pct":24.79,"positions":350,"prices":{"avg_long_price":1.4772,"avg_short_price":1.4728,"rate":1.4696,"decimals":5,"long_pips":-76.0,"short_pips":32.0,"long_move_pct":-0.514,"short_move_pct":0.217,"source":"MyFxBook"}},"EURTHB":{"sources":[{"source":"Dukascopy","long_pct":26.25}],"coverage":1,"average_long_pct":26.25,"spread_pct":0.0,"positions":0},"EURTRY":{"sources":[{"source":"Dukascopy","long_pct":25.0},{"source":"MyFxBook","long_pct":0.0,"positions":8,"lots":1.11}],"coverage":2,"average_long_pct":12.5,"spread_pct":25.0,"positions":8,"prices":{"avg_long_price":0.0,"avg_short_price":47.8975,"rate":56.2471,"decimals":5,"long_pips":null,"short_pips":-83496.0,"long_move_pct":null,"short_move_pct":-17.432,"source":"MyFxBook"}},"EURUSD":{"sources":[{"source":"MyFxBook","long_pct":37.46,"positions":42833,"lots":13293.93},{"source":"Dukascopy","long_pct":37.06}],"coverage":2,"average_long_pct":37.26,"spread_pct":0.4,"positions":42833,"prices":{"avg_long_price":1.1651,"avg_short_price":1.1379,"rate":1.1613,"decimals":5,"long_pips":-38.0,"short_pips":-234.0,"long_move_pct":-0.326,"short_move_pct":-2.056,"source":"MyFxBook"}},"EURZAR":{"sources":[{"source":"Dukascopy","long_pct":29.22},{"source":"MyFxBook","long_pct":3.06,"positions":21,"lots":2.29}],"coverage":2,"average_long_pct":16.14,"spread_pct":26.16,"positions":21,"prices":{"avg_long_price":19.1351,"avg_short_price":17.2828,"rate":18.53465,"decimals":5,"long_pips":-6004.5,"short_pips":-12518.5,"long_move_pct":-3.138,"short_move_pct":-7.243,"source":"MyFxBook"}},"EUS.IDXEUR":{"sources":[{"source":"Dukascopy","long_pct":31.03}],"coverage":1,"average_long_pct":31.03,"spread_pct":0.0,"positions":0},"FB.USUSD":{"sources":[{"source":"Dukascopy","long_pct":74.27}],"coverage":1,"average_long_pct":74.27,"spread_pct":0.0,"positions":0},"FE.USUSD":{"sources":[{"source":"Dukascopy","long_pct":29.04}],"coverage":1,"average_long_pct":29.04,"spread_pct":0.0,"positions":0},"FETUSD":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":5,"lots":0.05}],"coverage":1,"average_long_pct":100.0,"spread_pct":0.0,"positions":5,"prices":{"avg_long_price":0.0,"avg_short_price":0.0,"rate":0.0,"decimals":5,"long_pips":null,"short_pips":null,"long_move_pct":null,"short_move_pct":null,"source":"MyFxBook"}},"FILUSD":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":11,"lots":0.85}],"coverage":1,"average_long_pct":100.0,"spread_pct":0.0,"positions":11,"prices":{"avg_long_price":2.9091,"avg_short_price":0.0,"rate":1.0,"decimals":5,"long_pips":-1.9,"short_pips":null,"long_move_pct":-65.625,"short_move_pct":null,"source":"MyFxBook"}},"FP.FREUR":{"sources":[{"source":"Dukascopy","long_pct":72.68}],"coverage":1,"average_long_pct":72.68,"spread_pct":0.0,"positions":0},"FRA.IDXEUR":{"sources":[{"source":"Dukascopy","long_pct":71.41}],"coverage":1,"average_long_pct":71.41,"spread_pct":0.0,"positions":0},"FTMUSD":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":1,"lots":0.01}],"coverage":1,"average_long_pct":100.0,"spread_pct":0.0,"positions":1,"prices":{"avg_long_price":0.0,"avg_short_price":0.0,"rate":0.0,"decimals":5,"long_pips":null,"short_pips":null,"long_move_pct":null,"short_move_pct":null,"source":"MyFxBook"}},"FXI.USUSD":{"sources":[{"source":"Dukascopy","long_pct":73.37}],"coverage":1,"average_long_pct":73.37,"spread_pct":0.0,"positions":0},"GAS.CMDUSD":{"sources":[{"source":"Dukascopy","long_pct":72.27}],"coverage":1,"average_long_pct":72.27,"spread_pct":0.0,"positions":0},"GBPAUD":{"sources":[{"source":"MyFxBook","long_pct":93.11,"positions":3233,"lots":519.11},{"source":"Dukascopy","long_pct":55.98}],"coverage":2,"average_long_pct":74.55,"spread_pct":37.13,"positions":3233,"prices":{"avg_long_price":1.9263,"avg_short_price":1.8719,"rate":1.8764,"decimals":5,"long_pips":-499.0,"short_pips":-45.0,"long_move_pct":-2.59,"short_move_pct":-0.24,"source":"MyFxBook"}},"GBPCAD":{"sources":[{"source":"MyFxBook","long_pct":73.34,"positions":2960,"lots":365.96},{"source":"Dukascopy","long_pct":25.64}],"coverage":2,"average_long_pct":49.49,"spread_pct":47.7,"positions":2960,"prices":{"avg_long_price":1.8757,"avg_short_price":1.8398,"rate":1.8697,"decimals":5,"long_pips":-60.0,"short_pips":-299.0,"long_move_pct":-0.32,"short_move_pct":-1.625,"source":"MyFxBook"}},"GBPCHF":{"sources":[{"source":"Dukascopy","long_pct":71.57},{"source":"MyFxBook","long_pct":31.51,"positions":2173,"lots":328.54}],"coverage":2,"average_long_pct":51.54,"spread_pct":40.06,"positions":2173,"prices":{"avg_long_price":1.1108,"avg_short_price":1.0758,"rate":1.0947,"decimals":5,"long_pips":-161.0,"short_pips":-189.0,"long_move_pct":-1.449,"short_move_pct":-1.757,"source":"MyFxBook"}},"GBPJPY":{"sources":[{"source":"MyFxBook","long_pct":89.86,"positions":5960,"lots":3049.34},{"source":"Dukascopy","long_pct":57.98}],"coverage":2,"average_long_pct":73.92,"spread_pct":31.88,"positions":5960,"prices":{"avg_long_price":213.1846,"avg_short_price":207.1507,"rate":211.158,"decimals":3,"long_pips":-202.7,"short_pips":-400.7,"long_move_pct":-0.951,"short_move_pct":-1.934,"source":"MyFxBook"}},"GBPMXN":{"sources":[{"source":"MyFxBook","long_pct":0.0,"positions":8,"lots":0.08}],"coverage":1,"average_long_pct":0.0,"spread_pct":0.0,"positions":8,"prices":{"avg_long_price":0.0,"avg_short_price":23.2316,"rate":22.80557,"decimals":5,"long_pips":null,"short_pips":4260.3,"long_move_pct":null,"short_move_pct":1.834,"source":"MyFxBook"}},"GBPNOK":{"sources":[{"source":"MyFxBook","long_pct":80.0,"positions":10,"lots":0.2}],"coverage":1,"average_long_pct":80.0,"spread_pct":0.0,"positions":10,"prices":{"avg_long_price":12.7099,"avg_short_price":12.5528,"rate":12.58046,"decimals":5,"long_pips":-1294.4,"short_pips":-276.6,"long_move_pct":-1.018,"short_move_pct":-0.22,"source":"MyFxBook"}},"GBPNZD":{"sources":[{"source":"MyFxBook","long_pct":74.16,"positions":2533,"lots":261.96},{"source":"Dukascopy","long_pct":28.45}],"coverage":2,"average_long_pct":51.3,"spread_pct":45.71,"positions":2533,"prices":{"avg_long_price":2.3247,"avg_short_price":2.2597,"rate":2.2976,"decimals":5,"long_pips":-271.0,"short_pips":-379.0,"long_move_pct":-1.166,"short_move_pct":-1.677,"source":"MyFxBook"}},"GBPPLN":{"sources":[{"source":"Dukascopy","long_pct":74.21}],"coverage":1,"average_long_pct":74.21,"spread_pct":0.0,"positions":0},"GBPSEK":{"sources":[{"source":"MyFxBook","long_pct":97.73,"positions":10,"lots":0.44},{"source":"Dukascopy","long_pct":73.82}],"coverage":2,"average_long_pct":85.78,"spread_pct":23.91,"positions":10,"prices":{"avg_long_price":12.9741,"avg_short_price":12.9189,"rate":12.9298,"decimals":5,"long_pips":-443.0,"short_pips":-109.0,"long_move_pct":-0.341,"short_move_pct":-0.084,"source":"MyFxBook"}},"GBPSGD":{"sources":[{"source":"MyFxBook","long_pct":85.81,"positions":116,"lots":13.6},{"source":"Dukascopy","long_pct":73.33}],"coverage":2,"average_long_pct":79.57,"spread_pct":12.48,"positions":116,"prices":{"avg_long_price":1.7291,"avg_short_price":1.7107,"rate":1.7115,"decimals":5,"long_pips":-176.0,"short_pips":-8.0,"long_move_pct":-1.018,"short_move_pct":-0.047,"source":"MyFxBook"}},"GBPTRY":{"sources":[{"source":"MyFxBook","long_pct":0.0,"positions":2,"lots":0.4}],"coverage":1,"average_long_pct":0.0,"spread_pct":0.0,"positions":2,"prices":{"avg_long_price":0.0,"avg_short_price":52.1016,"rate":65.43072,"decimals":5,"long_pips":null,"short_pips":-133291.2,"long_move_pct":null,"short_move_pct":-25.583,"source":"MyFxBook"}},"GBPUSD":{"sources":[{"source":"MyFxBook","long_pct":44.21,"positions":24776,"lots":7207.13},{"source":"Dukascopy","long_pct":31.71}],"coverage":2,"average_long_pct":37.96,"spread_pct":12.5,"positions":24776,"prices":{"avg_long_price":1.357,"avg_short_price":1.3279,"rate":1.3521,"decimals":5,"long_pips":-49.0,"short_pips":-242.0,"long_move_pct":-0.361,"short_move_pct":-1.822,"source":"MyFxBook"}},"GBR.IDXGBP":{"sources":[{"source":"Dukascopy","long_pct":47.62}],"coverage":1,"average_long_pct":47.62,"spread_pct":0.0,"positions":0},"GLD.USUSD":{"sources":[{"source":"Dukascopy","long_pct":74.81}],"coverage":1,"average_long_pct":74.81,"spread_pct":0.0,"positions":0},"GLEN.GBGBX":{"sources":[{"source":"Dukascopy","long_pct":72.1}],"coverage":1,"average_long_pct":72.1,"spread_pct":0.0,"positions":0},"GLW.USUSD":{"sources":[{"source":"Dukascopy","long_pct":74.93}],"coverage":1,"average_long_pct":74.93,"spread_pct":0.0,"positions":0},"GM.USUSD":{"sources":[{"source":"Dukascopy","long_pct":72.31}],"coverage":1,"average_long_pct":72.31,"spread_pct":0.0,"positions":0},"GOOG.USUSD":{"sources":[{"source":"Dukascopy","long_pct":73.94}],"coverage":1,"average_long_pct":73.94,"spread_pct":0.0,"positions":0},"GOOGL.USUSD":{"sources":[{"source":"Dukascopy","long_pct":71.62}],"coverage":1,"average_long_pct":71.62,"spread_pct":0.0,"positions":0},"GRTUSD":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":3,"lots":0.03}],"coverage":1,"average_long_pct":100.0,"spread_pct":0.0,"positions":3,"prices":{"avg_long_price":0.0,"avg_short_price":0.0,"rate":0.0,"decimals":5,"long_pips":null,"short_pips":null,"long_move_pct":null,"short_move_pct":null,"source":"MyFxBook"}},"GSK.GBGBX":{"sources":[{"source":"Dukascopy","long_pct":73.51}],"coverage":1,"average_long_pct":73.51,"spread_pct":0.0,"positions":0},"HKDJPY":{"sources":[{"source":"Dukascopy","long_pct":72.8}],"coverage":1,"average_long_pct":72.8,"spread_pct":0.0,"positions":0},"HKG.IDXHKD":{"sources":[{"source":"Dukascopy","long_pct":73.11}],"coverage":1,"average_long_pct":73.11,"spread_pct":0.0,"positions":0},"HSBA.GBGBX":{"sources":[{"source":"Dukascopy","long_pct":71.86}],"coverage":1,"average_long_pct":71.86,"spread_pct":0.0,"positions":0},"IBE.ESEUR":{"sources":[{"source":"Dukascopy","long_pct":72.32}],"coverage":1,"average_long_pct":72.32,"spread_pct":0.0,"positions":0},"IBM.USUSD":{"sources":[{"source":"Dukascopy","long_pct":72.2}],"coverage":1,"average_long_pct":72.2,"spread_pct":0.0,"positions":0},"ICPUSD":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":6,"lots":0.07}],"coverage":1,"average_long_pct":100.0,"spread_pct":0.0,"positions":6,"prices":{"avg_long_price":7.6667,"avg_short_price":0.0,"rate":3.0,"decimals":5,"long_pips":-4.7,"short_pips":null,"long_move_pct":-60.87,"short_move_pct":null,"source":"MyFxBook"}},"IEF.USUSD":{"sources":[{"source":"Dukascopy","long_pct":74.54}],"coverage":1,"average_long_pct":74.54,"spread_pct":0.0,"positions":0},"IFX.DEEUR":{"sources":[{"source":"Dukascopy","long_pct":73.32}],"coverage":1,"average_long_pct":73.32,"spread_pct":0.0,"positions":0},"IGLN.USUSD":{"sources":[{"source":"Dukascopy","long_pct":73.72}],"coverage":1,"average_long_pct":73.72,"spread_pct":0.0,"positions":0},"IJH.USUSD":{"sources":[{"source":"Dukascopy","long_pct":72.06}],"coverage":1,"average_long_pct":72.06,"spread_pct":0.0,"positions":0},"ILMN.USUSD":{"sources":[{"source":"Dukascopy","long_pct":72.57}],"coverage":1,"average_long_pct":72.57,"spread_pct":0.0,"positions":0},"INTC.USUSD":{"sources":[{"source":"Dukascopy","long_pct":72.71}],"coverage":1,"average_long_pct":72.71,"spread_pct":0.0,"positions":0},"INTU.USUSD":{"sources":[{"source":"Dukascopy","long_pct":74.35}],"coverage":1,"average_long_pct":74.35,"spread_pct":0.0,"positions":0},"IONS.USUSD":{"sources":[{"source":"Dukascopy","long_pct":26.81}],"coverage":1,"average_long_pct":26.81,"spread_pct":0.0,"positions":0},"IOTUSD":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":1,"lots":0.1}],"coverage":1,"average_long_pct":100.0,"spread_pct":0.0,"positions":1,"prices":{"avg_long_price":0.22,"avg_short_price":0.0,"rate":0.04,"decimals":2,"long_pips":-18.0,"short_pips":null,"long_move_pct":-81.818,"short_move_pct":null,"source":"MyFxBook"}},"ISRG.USUSD":{"sources":[{"source":"Dukascopy","long_pct":71.17}],"coverage":1,"average_long_pct":71.17,"spread_pct":0.0,"positions":0},"IVE.USUSD":{"sources":[{"source":"Dukascopy","long_pct":70.69}],"coverage":1,"average_long_pct":70.69,"spread_pct":0.0,"positions":0},"IVW.USUSD":{"sources":[{"source":"Dukascopy","long_pct":70.75}],"coverage":1,"average_long_pct":70.75,"spread_pct":0.0,"positions":0},"IVZ.USUSD":{"sources":[{"source":"Dukascopy","long_pct":27.68}],"coverage":1,"average_long_pct":27.68,"spread_pct":0.0,"positions":0},"IWD.USUSD":{"sources":[{"source":"Dukascopy","long_pct":74.21}],"coverage":1,"average_long_pct":74.21,"spread_pct":0.0,"positions":0},"JETS.USUSD":{"sources":[{"source":"Dukascopy","long_pct":70.07}],"coverage":1,"average_long_pct":70.07,"spread_pct":0.0,"positions":0},"JNJ.USUSD":{"sources":[{"source":"Dukascopy","long_pct":25.95}],"coverage":1,"average_long_pct":25.95,"spread_pct":0.0,"positions":0},"JNK.USUSD":{"sources":[{"source":"Dukascopy","long_pct":72.64}],"coverage":1,"average_long_pct":72.64,"spread_pct":0.0,"positions":0},"JPM.USUSD":{"sources":[{"source":"Dukascopy","long_pct":74.51}],"coverage":1,"average_long_pct":74.51,"spread_pct":0.0,"positions":0},"JPN.IDXJPY":{"sources":[{"source":"Dukascopy","long_pct":70.83}],"coverage":1,"average_long_pct":70.83,"spread_pct":0.0,"positions":0},"KO.USUSD":{"sources":[{"source":"Dukascopy","long_pct":73.03}],"coverage":1,"average_long_pct":73.03,"spread_pct":0.0,"positions":0},"LEN.USUSD":{"sources":[{"source":"Dukascopy","long_pct":71.37}],"coverage":1,"average_long_pct":71.37,"spread_pct":0.0,"positions":0},"LHA.DEEUR":{"sources":[{"source":"Dukascopy","long_pct":61.68}],"coverage":1,"average_long_pct":61.68,"spread_pct":0.0,"positions":0},"LIGHT.CMDUSD":{"sources":[{"source":"Dukascopy","long_pct":37.39}],"coverage":1,"average_long_pct":37.39,"spread_pct":0.0,"positions":0},"LLOY.GBGBX":{"sources":[{"source":"Dukascopy","long_pct":73.23}],"coverage":1,"average_long_pct":73.23,"spread_pct":0.0,"positions":0},"LNKUSD":{"sources":[{"source":"Dukascopy","long_pct":73.8}],"coverage":1,"average_long_pct":73.8,"spread_pct":0.0,"positions":0},"LRCUSD":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":1,"lots":0.3}],"coverage":1,"average_long_pct":100.0,"spread_pct":0.0,"positions":1,"prices":{"avg_long_price":0.0,"avg_short_price":0.0,"rate":0.0,"decimals":5,"long_pips":null,"short_pips":null,"long_move_pct":null,"short_move_pct":null,"source":"MyFxBook"}},"LRCX.USUSD":{"sources":[{"source":"Dukascopy","long_pct":71.58}],"coverage":1,"average_long_pct":71.58,"spread_pct":0.0,"positions":0},"LTCBTC":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":2,"lots":2.0}],"coverage":1,"average_long_pct":100.0,"spread_pct":0.0,"positions":2,"prices":{"avg_long_price":0.0,"avg_short_price":0.0,"rate":0.0,"decimals":2,"long_pips":null,"short_pips":null,"long_move_pct":null,"short_move_pct":null,"source":"MyFxBook"}},"LTCEUR":{"sources":[{"source":"Dukascopy","long_pct":71.12}],"coverage":1,"average_long_pct":71.12,"spread_pct":0.0,"positions":0},"LTCUSD":{"sources":[{"source":"MyFxBook","long_pct":98.0,"positions":361,"lots":66.46},{"source":"Dukascopy","long_pct":73.04}],"coverage":2,"average_long_pct":85.52,"spread_pct":24.96,"positions":361,"prices":{"avg_long_price":73.5935,"avg_short_price":49.4233,"rate":51.7,"decimals":2,"long_pips":-2189.4,"short_pips":-227.7,"long_move_pct":-29.749,"short_move_pct":-4.607,"source":"MyFxBook"}},"LULU.USUSD":{"sources":[{"source":"Dukascopy","long_pct":74.74}],"coverage":1,"average_long_pct":74.74,"spread_pct":0.0,"positions":0},"LVS.USUSD":{"sources":[{"source":"Dukascopy","long_pct":74.62}],"coverage":1,"average_long_pct":74.62,"spread_pct":0.0,"positions":0},"LYXBNK.FREUR":{"sources":[{"source":"Dukascopy","long_pct":71.56}],"coverage":1,"average_long_pct":71.56,"spread_pct":0.0,"positions":0},"MA.USUSD":{"sources":[{"source":"Dukascopy","long_pct":71.9}],"coverage":1,"average_long_pct":71.9,"spread_pct":0.0,"positions":0},"MCD.USUSD":{"sources":[{"source":"Dukascopy","long_pct":74.39}],"coverage":1,"average_long_pct":74.39,"spread_pct":0.0,"positions":0},"MDT.USUSD":{"sources":[{"source":"Dukascopy","long_pct":72.22}],"coverage":1,"average_long_pct":72.22,"spread_pct":0.0,"positions":0},"MHG.NONOK":{"sources":[{"source":"Dukascopy","long_pct":51.85}],"coverage":1,"average_long_pct":51.85,"spread_pct":0.0,"positions":0},"MKRUSD":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":1,"lots":0.01}],"coverage":1,"average_long_pct":100.0,"spread_pct":0.0,"positions":1,"prices":{"avg_long_price":1289.0,"avg_short_price":0.0,"rate":1096.0,"decimals":5,"long_pips":-193.0,"short_pips":null,"long_move_pct":-14.973,"short_move_pct":null,"source":"MyFxBook"}},"MRK.USUSD":{"sources":[{"source":"Dukascopy","long_pct":70.07}],"coverage":1,"average_long_pct":70.07,"spread_pct":0.0,"positions":0},"MRVL.USUSD":{"sources":[{"source":"Dukascopy","long_pct":72.83}],"coverage":1,"average_long_pct":72.83,"spread_pct":0.0,"positions":0},"MSFT.USUSD":{"sources":[{"source":"Dukascopy","long_pct":70.68}],"coverage":1,"average_long_pct":70.68,"spread_pct":0.0,"positions":0},"MU.USUSD":{"sources":[{"source":"Dukascopy","long_pct":73.63}],"coverage":1,"average_long_pct":73.63,"spread_pct":0.0,"positions":0},"NEE.USUSD":{"sources":[{"source":"Dukascopy","long_pct":50.0}],"coverage":1,"average_long_pct":50.0,"spread_pct":0.0,"positions":0},"NEOUSD":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":10,"lots":11.5}],"coverage":1,"average_long_pct":100.0,"spread_pct":0.0,"positions":10,"prices":{"avg_long_price":9.803,"avg_short_price":0.0,"rate":2.12,"decimals":2,"long_pips":-768.3,"short_pips":null,"long_move_pct":-78.374,"short_move_pct":null,"source":"MyFxBook"}},"NESN.CHCHF":{"sources":[{"source":"Dukascopy","long_pct":72.73}],"coverage":1,"average_long_pct":72.73,"spread_pct":0.0,"positions":0},"NFLX.USUSD":{"sources":[{"source":"Dukascopy","long_pct":73.25}],"coverage":1,"average_long_pct":73.25,"spread_pct":0.0,"positions":0},"NHY.NONOK":{"sources":[{"source":"Dukascopy","long_pct":63.24}],"coverage":1,"average_long_pct":63.24,"spread_pct":0.0,"positions":0},"NIO.USUSD":{"sources":[{"source":"Dukascopy","long_pct":73.02}],"coverage":1,"average_long_pct":73.02,"spread_pct":0.0,"positions":0},"NKE.USUSD":{"sources":[{"source":"Dukascopy","long_pct":72.58}],"coverage":1,"average_long_pct":72.58,"spread_pct":0.0,"positions":0},"NOKILS":{"sources":[{"source":"Dukascopy","long_pct":74.64}],"coverage":1,"average_long_pct":74.64,"spread_pct":0.0,"positions":0},"NOKJPY":{"sources":[{"source":"MyFxBook","long_pct":3.85,"positions":5,"lots":1.04}],"coverage":1,"average_long_pct":3.85,"spread_pct":0.0,"positions":5,"prices":{"avg_long_price":16.95,"avg_short_price":16.437,"rate":16.777,"decimals":3,"long_pips":-17.3,"short_pips":-34.0,"long_move_pct":-1.021,"short_move_pct":-2.069,"source":"MyFxBook"}},"NOKSEK":{"sources":[{"source":"MyFxBook","long_pct":45.6,"positions":97,"lots":1.93}],"coverage":1,"average_long_pct":45.6,"spread_pct":0.0,"positions":97,"prices":{"avg_long_price":1.0297,"avg_short_price":1.0159,"rate":1.0272,"decimals":5,"long_pips":-25.0,"short_pips":-113.0,"long_move_pct":-0.243,"short_move_pct":-1.112,"source":"MyFxBook"}},"NOVOB.DKDKK":{"sources":[{"source":"Dukascopy","long_pct":71.07}],"coverage":1,"average_long_pct":71.07,"spread_pct":0.0,"positions":0},"NVDA.USUSD":{"sources":[{"source":"Dukascopy","long_pct":70.84}],"coverage":1,"average_long_pct":70.84,"spread_pct":0.0,"positions":0},"NZDAED":{"sources":[{"source":"Dukascopy","long_pct":73.84}],"coverage":1,"average_long_pct":73.84,"spread_pct":0.0,"positions":0},"NZDCAD":{"sources":[{"source":"MyFxBook","long_pct":77.25,"positions":6087,"lots":1283.18},{"source":"Dukascopy","long_pct":25.96}],"coverage":2,"average_long_pct":51.61,"spread_pct":51.29,"positions":6087,"prices":{"avg_long_price":0.8177,"avg_short_price":0.8132,"rate":0.8133,"decimals":5,"long_pips":-44.0,"short_pips":-1.0,"long_move_pct":-0.538,"short_move_pct":-0.012,"source":"MyFxBook"}},"NZDCHF":{"sources":[{"source":"Dukascopy","long_pct":53.63},{"source":"MyFxBook","long_pct":39.64,"positions":3705,"lots":580.66}],"coverage":2,"average_long_pct":46.64,"spread_pct":13.99,"positions":3705,"prices":{"avg_long_price":0.5027,"avg_short_price":0.4692,"rate":0.476,"decimals":5,"long_pips":-267.0,"short_pips":-68.0,"long_move_pct":-5.311,"short_move_pct":-1.449,"source":"MyFxBook"}},"NZDHKD":{"sources":[{"source":"Dukascopy","long_pct":73.31}],"coverage":1,"average_long_pct":73.31,"spread_pct":0.0,"positions":0},"NZDJPY":{"sources":[{"source":"MyFxBook","long_pct":92.03,"positions":2210,"lots":755.68},{"source":"Dukascopy","long_pct":73.65}],"coverage":2,"average_long_pct":82.84,"spread_pct":18.38,"positions":2210,"prices":{"avg_long_price":93.1161,"avg_short_price":90.1095,"rate":91.85,"decimals":3,"long_pips":-126.6,"short_pips":-174.0,"long_move_pct":-1.36,"short_move_pct":-1.932,"source":"MyFxBook"}},"NZDSGD":{"sources":[{"source":"Dukascopy","long_pct":74.43}],"coverage":1,"average_long_pct":74.43,"spread_pct":0.0,"positions":0},"NZDUSD":{"sources":[{"source":"Dukascopy","long_pct":72.12},{"source":"MyFxBook","long_pct":48.5,"positions":3763,"lots":1024.3}],"coverage":2,"average_long_pct":60.31,"spread_pct":23.62,"positions":3763,"prices":{"avg_long_price":0.5955,"avg_short_price":0.5831,"rate":0.5878,"decimals":5,"long_pips":-77.0,"short_pips":-47.0,"long_move_pct":-1.293,"short_move_pct":-0.806,"source":"MyFxBook"}},"OJUICE.CMDUSX":{"sources":[{"source":"Dukascopy","long_pct":70.71}],"coverage":1,"average_long_pct":70.71,"spread_pct":0.0,"positions":0},"OKTA.USUSD":{"sources":[{"source":"Dukascopy","long_pct":74.24}],"coverage":1,"average_long_pct":74.24,"spread_pct":0.0,"positions":0},"OMGUSD":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":66,"lots":264.0}],"coverage":1,"average_long_pct":100.0,"spread_pct":0.0,"positions":66,"prices":{"avg_long_price":0.7992,"avg_short_price":0.0,"rate":0.05,"decimals":2,"long_pips":-74.9,"short_pips":null,"long_move_pct":-93.744,"short_move_pct":null,"source":"MyFxBook"}},"ORCL.USUSD":{"sources":[{"source":"Dukascopy","long_pct":74.01}],"coverage":1,"average_long_pct":74.01,"spread_pct":0.0,"positions":0},"OXY.USUSD":{"sources":[{"source":"Dukascopy","long_pct":73.53}],"coverage":1,"average_long_pct":73.53,"spread_pct":0.0,"positions":0},"PAH3.DEEUR":{"sources":[{"source":"Dukascopy","long_pct":25.92}],"coverage":1,"average_long_pct":25.92,"spread_pct":0.0,"positions":0},"PBF.USUSD":{"sources":[{"source":"Dukascopy","long_pct":72.42}],"coverage":1,"average_long_pct":72.42,"spread_pct":0.0,"positions":0},"PBJ.USUSD":{"sources":[{"source":"Dukascopy","long_pct":72.06}],"coverage":1,"average_long_pct":72.06,"spread_pct":0.0,"positions":0},"PBR.USUSD":{"sources":[{"source":"Dukascopy","long_pct":73.37}],"coverage":1,"average_long_pct":73.37,"spread_pct":0.0,"positions":0},"PFE.USUSD":{"sources":[{"source":"Dukascopy","long_pct":66.67}],"coverage":1,"average_long_pct":66.67,"spread_pct":0.0,"positions":0},"PLN.IDXPLN":{"sources":[{"source":"Dukascopy","long_pct":28.98}],"coverage":1,"average_long_pct":28.98,"spread_pct":0.0,"positions":0},"PLTR.USUSD":{"sources":[{"source":"Dukascopy","long_pct":70.6}],"coverage":1,"average_long_pct":70.6,"spread_pct":0.0,"positions":0},"PLUG.USUSD":{"sources":[{"source":"Dukascopy","long_pct":70.43}],"coverage":1,"average_long_pct":70.43,"spread_pct":0.0,"positions":0},"PTEN.USUSD":{"sources":[{"source":"Dukascopy","long_pct":71.11}],"coverage":1,"average_long_pct":71.11,"spread_pct":0.0,"positions":0},"PTON.USUSD":{"sources":[{"source":"Dukascopy","long_pct":72.31}],"coverage":1,"average_long_pct":72.31,"spread_pct":0.0,"positions":0},"PYPL.USUSD":{"sources":[{"source":"Dukascopy","long_pct":73.62}],"coverage":1,"average_long_pct":73.62,"spread_pct":0.0,"positions":0},"QCOM.USUSD":{"sources":[{"source":"Dukascopy","long_pct":70.89}],"coverage":1,"average_long_pct":70.89,"spread_pct":0.0,"positions":0},"QQQ.USUSD":{"sources":[{"source":"Dukascopy","long_pct":70.01}],"coverage":1,"average_long_pct":70.01,"spread_pct":0.0,"positions":0},"QTMUSD":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":46,"lots":161.0}],"coverage":1,"average_long_pct":100.0,"spread_pct":0.0,"positions":46,"prices":{"avg_long_price":4.5472,"avg_short_price":0.0,"rate":0.0,"decimals":2,"long_pips":null,"short_pips":null,"long_move_pct":null,"short_move_pct":null,"source":"MyFxBook"}},"RACE.ITEUR":{"sources":[{"source":"Dukascopy","long_pct":70.6}],"coverage":1,"average_long_pct":70.6,"spread_pct":0.0,"positions":0},"RBS.GBGBX":{"sources":[{"source":"Dukascopy","long_pct":70.76}],"coverage":1,"average_long_pct":70.76,"spread_pct":0.0,"positions":0},"RNO.FREUR":{"sources":[{"source":"Dukascopy","long_pct":31.71}],"coverage":1,"average_long_pct":31.71,"spread_pct":0.0,"positions":0},"RR.GBGBX":{"sources":[{"source":"Dukascopy","long_pct":28.13}],"coverage":1,"average_long_pct":28.13,"spread_pct":0.0,"positions":0},"RWE.DEEUR":{"sources":[{"source":"Dukascopy","long_pct":72.0}],"coverage":1,"average_long_pct":72.0,"spread_pct":0.0,"positions":0},"SABR.USUSD":{"sources":[{"source":"Dukascopy","long_pct":72.51}],"coverage":1,"average_long_pct":72.51,"spread_pct":0.0,"positions":0},"SAP.DEEUR":{"sources":[{"source":"Dukascopy","long_pct":72.51}],"coverage":1,"average_long_pct":72.51,"spread_pct":0.0,"positions":0},"SCAB.SESEK":{"sources":[{"source":"Dukascopy","long_pct":51.58}],"coverage":1,"average_long_pct":51.58,"spread_pct":0.0,"positions":0},"SEDG.USUSD":{"sources":[{"source":"Dukascopy","long_pct":57.03}],"coverage":1,"average_long_pct":57.03,"spread_pct":0.0,"positions":0},"SEKJPY":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":8,"lots":0.08}],"coverage":1,"average_long_pct":100.0,"spread_pct":0.0,"positions":8,"prices":{"avg_long_price":16.526,"avg_short_price":0.0,"rate":16.319,"decimals":3,"long_pips":-20.7,"short_pips":null,"long_move_pct":-1.253,"short_move_pct":null,"source":"MyFxBook"}},"SGD.IDXSGD":{"sources":[{"source":"Dukascopy","long_pct":72.02}],"coverage":1,"average_long_pct":72.02,"spread_pct":0.0,"positions":0},"SGDJPY":{"sources":[{"source":"Dukascopy","long_pct":74.02},{"source":"MyFxBook","long_pct":10.99,"positions":20,"lots":1.91}],"coverage":2,"average_long_pct":42.5,"spread_pct":63.03,"positions":20,"prices":{"avg_long_price":124.3384,"avg_short_price":122.561,"rate":123.256,"decimals":3,"long_pips":-108.2,"short_pips":-69.5,"long_move_pct":-0.871,"short_move_pct":-0.567,"source":"MyFxBook"}},"SIE.DEEUR":{"sources":[{"source":"Dukascopy","long_pct":71.7}],"coverage":1,"average_long_pct":71.7,"spread_pct":0.0,"positions":0},"SLB.USUSD":{"sources":[{"source":"Dukascopy","long_pct":70.61}],"coverage":1,"average_long_pct":70.61,"spread_pct":0.0,"positions":0},"SLV.USUSD":{"sources":[{"source":"Dukascopy","long_pct":74.39}],"coverage":1,"average_long_pct":74.39,"spread_pct":0.0,"positions":0},"SMH.USUSD":{"sources":[{"source":"Dukascopy","long_pct":73.72}],"coverage":1,"average_long_pct":73.72,"spread_pct":0.0,"positions":0},"SNXUSD":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":1,"lots":0.5}],"coverage":1,"average_long_pct":100.0,"spread_pct":0.0,"positions":1,"prices":{"avg_long_price":0.0,"avg_short_price":0.0,"rate":0.0,"decimals":5,"long_pips":null,"short_pips":null,"long_move_pct":null,"short_move_pct":null,"source":"MyFxBook"}},"SOLUSD":{"sources":[{"source":"MyFxBook","long_pct":97.45,"positions":137,"lots":210.07}],"coverage":1,"average_long_pct":97.45,"spread_pct":0.0,"positions":137,"prices":{"avg_long_price":177.512,"avg_short_price":132.3333,"rate":102.0,"decimals":5,"long_pips":-75.5,"short_pips":30.3,"long_move_pct":-42.539,"short_move_pct":22.922,"source":"MyFxBook"}},"SOYBEAN.CMDUSX":{"sources":[{"source":"Dukascopy","long_pct":69.57}],"coverage":1,"average_long_pct":69.57,"spread_pct":0.0,"positions":0},"SPGI.USUSD":{"sources":[{"source":"Dukascopy","long_pct":70.1}],"coverage":1,"average_long_pct":70.1,"spread_pct":0.0,"positions":0},"SPY.USUSD":{"sources":[{"source":"Dukascopy","long_pct":73.91}],"coverage":1,"average_long_pct":73.91,"spread_pct":0.0,"positions":0},"STAN.GBGBX":{"sources":[{"source":"Dukascopy","long_pct":28.57}],"coverage":1,"average_long_pct":28.57,"spread_pct":0.0,"positions":0},"STXUSD":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":1,"lots":5.0}],"coverage":1,"average_long_pct":100.0,"spread_pct":0.0,"positions":1,"prices":{"avg_long_price":0.0,"avg_short_price":0.0,"rate":0.0,"decimals":5,"long_pips":null,"short_pips":null,"long_move_pct":null,"short_move_pct":null,"source":"MyFxBook"}},"SU.FREUR":{"sources":[{"source":"Dukascopy","long_pct":73.86}],"coverage":1,"average_long_pct":73.86,"spread_pct":0.0,"positions":0},"SUGAR.CMDUSD":{"sources":[{"source":"Dukascopy","long_pct":73.12}],"coverage":1,"average_long_pct":73.12,"spread_pct":0.0,"positions":0},"SWK.USUSD":{"sources":[{"source":"Dukascopy","long_pct":28.3}],"coverage":1,"average_long_pct":28.3,"spread_pct":0.0,"positions":0},"TEN.ITEUR":{"sources":[{"source":"Dukascopy","long_pct":27.35}],"coverage":1,"average_long_pct":27.35,"spread_pct":0.0,"positions":0},"TJX.USUSD":{"sources":[{"source":"Dukascopy","long_pct":25.45}],"coverage":1,"average_long_pct":25.45,"spread_pct":0.0,"positions":0},"TLT.USUSD":{"sources":[{"source":"Dukascopy","long_pct":72.71}],"coverage":1,"average_long_pct":72.71,"spread_pct":0.0,"positions":0},"TRN.ITEUR":{"sources":[{"source":"Dukascopy","long_pct":44.91}],"coverage":1,"average_long_pct":44.91,"spread_pct":0.0,"positions":0},"TRXUSD":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":1,"lots":0.1},{"source":"Dukascopy","long_pct":54.4}],"coverage":2,"average_long_pct":77.2,"spread_pct":45.6,"positions":1,"prices":{"avg_long_price":0.32,"avg_short_price":0.0,"rate":0.33,"decimals":2,"long_pips":1.0,"short_pips":null,"long_move_pct":3.125,"short_move_pct":null,"source":"MyFxBook"}},"TRYJPY":{"sources":[{"source":"Dukascopy","long_pct":70.61}],"coverage":1,"average_long_pct":70.61,"spread_pct":0.0,"positions":0},"TSLA.USUSD":{"sources":[{"source":"Dukascopy","long_pct":73.48}],"coverage":1,"average_long_pct":73.48,"spread_pct":0.0,"positions":0},"TSM.USUSD":{"sources":[{"source":"Dukascopy","long_pct":70.23}],"coverage":1,"average_long_pct":70.23,"spread_pct":0.0,"positions":0},"TUI1.DEEUR":{"sources":[{"source":"Dukascopy","long_pct":70.82}],"coverage":1,"average_long_pct":70.82,"spread_pct":0.0,"positions":0},"UBSG.CHCHF":{"sources":[{"source":"Dukascopy","long_pct":50.19}],"coverage":1,"average_long_pct":50.19,"spread_pct":0.0,"positions":0},"UKGILT.TRGBP":{"sources":[{"source":"Dukascopy","long_pct":74.54}],"coverage":1,"average_long_pct":74.54,"spread_pct":0.0,"positions":0},"ULTA.USUSD":{"sources":[{"source":"Dukascopy","long_pct":73.46}],"coverage":1,"average_long_pct":73.46,"spread_pct":0.0,"positions":0},"UMI.BEEUR":{"sources":[{"source":"Dukascopy","long_pct":72.88}],"coverage":1,"average_long_pct":72.88,"spread_pct":0.0,"positions":0},"UNIUSD":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":4,"lots":7.5},{"source":"Dukascopy","long_pct":74.64}],"coverage":2,"average_long_pct":87.32,"spread_pct":25.36,"positions":4,"prices":{"avg_long_price":6.75,"avg_short_price":0.0,"rate":6.0,"decimals":5,"long_pips":-0.8,"short_pips":null,"long_move_pct":-11.111,"short_move_pct":null,"source":"MyFxBook"}},"UNP.USUSD":{"sources":[{"source":"Dukascopy","long_pct":72.47}],"coverage":1,"average_long_pct":72.47,"spread_pct":0.0,"positions":0},"USA30.IDXUSD":{"sources":[{"source":"Dukascopy","long_pct":41.01}],"coverage":1,"average_long_pct":41.01,"spread_pct":0.0,"positions":0},"USA500.IDXUSD":{"sources":[{"source":"Dukascopy","long_pct":30.92}],"coverage":1,"average_long_pct":30.92,"spread_pct":0.0,"positions":0},"USATECH.IDXUSD":{"sources":[{"source":"Dukascopy","long_pct":39.17}],"coverage":1,"average_long_pct":39.17,"spread_pct":0.0,"positions":0},"USB.USUSD":{"sources":[{"source":"Dukascopy","long_pct":72.61}],"coverage":1,"average_long_pct":72.61,"spread_pct":0.0,"positions":0},"USDCAD":{"sources":[{"source":"MyFxBook","long_pct":65.9,"positions":9053,"lots":1859.94},{"source":"Dukascopy","long_pct":57.04}],"coverage":2,"average_long_pct":61.47,"spread_pct":8.86,"positions":9053,"prices":{"avg_long_price":1.3986,"avg_short_price":1.382,"rate":1.3836,"decimals":5,"long_pips":-150.0,"short_pips":-16.0,"long_move_pct":-1.073,"short_move_pct":-0.116,"source":"MyFxBook"}},"USDCHF":{"sources":[{"source":"Dukascopy","long_pct":74.79},{"source":"MyFxBook","long_pct":50.5,"positions":5908,"lots":1503.21}],"coverage":2,"average_long_pct":62.65,"spread_pct":24.29,"positions":5908,"prices":{"avg_long_price":0.8399,"avg_short_price":0.8045,"rate":0.80978,"decimals":5,"long_pips":-301.2,"short_pips":-52.8,"long_move_pct":-3.586,"short_move_pct":-0.656,"source":"MyFxBook"}},"USDCNH":{"sources":[{"source":"MyFxBook","long_pct":99.97,"positions":66,"lots":32.01},{"source":"Dukascopy","long_pct":73.93}],"coverage":2,"average_long_pct":86.95,"spread_pct":26.04,"positions":66,"prices":{"avg_long_price":6.9171,"avg_short_price":6.7173,"rate":6.7079,"decimals":4,"long_pips":-2092.0,"short_pips":94.0,"long_move_pct":-3.024,"short_move_pct":0.14,"source":"MyFxBook"}},"USDCZK":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":20,"lots":0.94},{"source":"Dukascopy","long_pct":66.67}],"coverage":2,"average_long_pct":83.34,"spread_pct":33.33,"positions":20,"prices":{"avg_long_price":21.8259,"avg_short_price":0.0,"rate":20.8102,"decimals":5,"long_pips":-10157.0,"short_pips":null,"long_move_pct":-4.654,"short_move_pct":null,"source":"MyFxBook"}},"USDDKK":{"sources":[{"source":"Dukascopy","long_pct":35.49}],"coverage":1,"average_long_pct":35.49,"spread_pct":0.0,"positions":0},"USDHKD":{"sources":[{"source":"Dukascopy","long_pct":72.15}],"coverage":1,"average_long_pct":72.15,"spread_pct":0.0,"positions":0},"USDHUF":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":70,"lots":7.03},{"source":"Dukascopy","long_pct":73.07}],"coverage":2,"average_long_pct":86.53,"spread_pct":26.93,"positions":70,"prices":{"avg_long_price":354.8761,"avg_short_price":0.0,"rate":311.68,"decimals":3,"long_pips":-4319.6,"short_pips":null,"long_move_pct":-12.172,"short_move_pct":null,"source":"MyFxBook"}},"USDILS":{"sources":[{"source":"Dukascopy","long_pct":74.48}],"coverage":1,"average_long_pct":74.48,"spread_pct":0.0,"positions":0},"USDJPY":{"sources":[{"source":"MyFxBook","long_pct":83.62,"positions":10069,"lots":2616.46},{"source":"Dukascopy","long_pct":32.52}],"coverage":2,"average_long_pct":58.07,"spread_pct":51.1,"positions":10069,"prices":{"avg_long_price":158.0714,"avg_short_price":153.0589,"rate":156.246,"decimals":3,"long_pips":-182.5,"short_pips":-318.7,"long_move_pct":-1.155,"short_move_pct":-2.082,"source":"MyFxBook"}},"USDMXN":{"sources":[{"source":"Dukascopy","long_pct":53.83},{"source":"MyFxBook","long_pct":46.24,"positions":73,"lots":8.5}],"coverage":2,"average_long_pct":50.03,"spread_pct":7.59,"positions":73,"prices":{"avg_long_price":17.9007,"avg_short_price":17.1898,"rate":16.8727,"decimals":5,"long_pips":-10280.0,"short_pips":3171.0,"long_move_pct":-5.743,"short_move_pct":1.845,"source":"MyFxBook"}},"USDNOK":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":25,"lots":0.92},{"source":"Dukascopy","long_pct":72.51}],"coverage":2,"average_long_pct":86.25,"spread_pct":27.49,"positions":25,"prices":{"avg_long_price":10.0008,"avg_short_price":0.0,"rate":9.3061,"decimals":5,"long_pips":-6947.0,"short_pips":null,"long_move_pct":-6.946,"short_move_pct":null,"source":"MyFxBook"}},"USDPLN":{"sources":[{"source":"MyFxBook","long_pct":94.74,"positions":18,"lots":0.38},{"source":"Dukascopy","long_pct":72.64}],"coverage":2,"average_long_pct":83.69,"spread_pct":22.1,"positions":18,"prices":{"avg_long_price":3.7882,"avg_short_price":3.7277,"rate":3.7083,"decimals":5,"long_pips":-799.0,"short_pips":194.0,"long_move_pct":-2.109,"short_move_pct":0.52,"source":"MyFxBook"}},"USDRON":{"sources":[{"source":"Dukascopy","long_pct":72.23}],"coverage":1,"average_long_pct":72.23,"spread_pct":0.0,"positions":0},"USDRUB":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":1,"lots":0.1}],"coverage":1,"average_long_pct":100.0,"spread_pct":0.0,"positions":1,"prices":{"avg_long_price":71.7917,"avg_short_price":0.0,"rate":85.82316,"decimals":5,"long_pips":140314.6,"short_pips":null,"long_move_pct":19.545,"short_move_pct":null,"source":"MyFxBook"}},"USDSEK":{"sources":[{"source":"MyFxBook","long_pct":92.95,"positions":27,"lots":2.98},{"source":"Dukascopy","long_pct":70.02}],"coverage":2,"average_long_pct":81.48,"spread_pct":22.93,"positions":27,"prices":{"avg_long_price":9.7436,"avg_short_price":9.5448,"rate":9.5651,"decimals":5,"long_pips":-1785.0,"short_pips":-203.0,"long_move_pct":-1.832,"short_move_pct":-0.213,"source":"MyFxBook"}},"USDSGD":{"sources":[{"source":"MyFxBook","long_pct":99.13,"positions":193,"lots":17.22},{"source":"Dukascopy","long_pct":72.64}],"coverage":2,"average_long_pct":85.88,"spread_pct":26.49,"positions":193,"prices":{"avg_long_price":1.2809,"avg_short_price":1.2723,"rate":1.2663,"decimals":5,"long_pips":-146.0,"short_pips":60.0,"long_move_pct":-1.14,"short_move_pct":0.472,"source":"MyFxBook"}},"USDTHB":{"sources":[{"source":"MyFxBook","long_pct":95.24,"positions":9,"lots":0.21}],"coverage":1,"average_long_pct":95.24,"spread_pct":0.0,"positions":9,"prices":{"avg_long_price":33.8399,"avg_short_price":31.049,"rate":32.91,"decimals":3,"long_pips":-93.0,"short_pips":-186.1,"long_move_pct":-2.748,"short_move_pct":-5.994,"source":"MyFxBook"}},"USDTRY":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":1,"lots":0.05},{"source":"Dukascopy","long_pct":29.77}],"coverage":2,"average_long_pct":64.89,"spread_pct":70.23,"positions":1,"prices":{"avg_long_price":47.8579,"avg_short_price":0.0,"rate":48.4281,"decimals":5,"long_pips":5702.0,"short_pips":null,"long_move_pct":1.191,"short_move_pct":null,"source":"MyFxBook"}},"USDZAR":{"sources":[{"source":"MyFxBook","long_pct":86.03,"positions":89,"lots":2.29},{"source":"Dukascopy","long_pct":28.81}],"coverage":2,"average_long_pct":57.42,"spread_pct":57.22,"positions":89,"prices":{"avg_long_price":17.3368,"avg_short_price":15.1393,"rate":15.9525,"decimals":5,"long_pips":-13843.0,"short_pips":-8132.0,"long_move_pct":-7.985,"short_move_pct":-5.371,"source":"MyFxBook"}},"USSC2000.IDXUSD":{"sources":[{"source":"Dukascopy","long_pct":25.63}],"coverage":1,"average_long_pct":25.63,"spread_pct":0.0,"positions":0},"USTBOND.TRUSD":{"sources":[{"source":"Dukascopy","long_pct":70.3}],"coverage":1,"average_long_pct":70.3,"spread_pct":0.0,"positions":0},"UU.GBGBX":{"sources":[{"source":"Dukascopy","long_pct":48.44}],"coverage":1,"average_long_pct":48.44,"spread_pct":0.0,"positions":0},"V.USUSD":{"sources":[{"source":"Dukascopy","long_pct":71.36}],"coverage":1,"average_long_pct":71.36,"spread_pct":0.0,"positions":0},"VETUSD":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":1,"lots":0.01}],"coverage":1,"average_long_pct":100.0,"spread_pct":0.0,"positions":1,"prices":{"avg_long_price":0.0,"avg_short_price":0.0,"rate":0.0,"decimals":5,"long_pips":null,"short_pips":null,"long_move_pct":null,"short_move_pct":null,"source":"MyFxBook"}},"VGK.USUSD":{"sources":[{"source":"Dukascopy","long_pct":74.97}],"coverage":1,"average_long_pct":74.97,"spread_pct":0.0,"positions":0},"VLO.USUSD":{"sources":[{"source":"Dukascopy","long_pct":71.16}],"coverage":1,"average_long_pct":71.16,"spread_pct":0.0,"positions":0},"VNA.DEEUR":{"sources":[{"source":"Dukascopy","long_pct":72.5}],"coverage":1,"average_long_pct":72.5,"spread_pct":0.0,"positions":0},"VNQ.USUSD":{"sources":[{"source":"Dukascopy","long_pct":75.0}],"coverage":1,"average_long_pct":75.0,"spread_pct":0.0,"positions":0},"VOL.IDXUSD":{"sources":[{"source":"Dukascopy","long_pct":73.97}],"coverage":1,"average_long_pct":73.97,"spread_pct":0.0,"positions":0},"VOLVB.SESEK":{"sources":[{"source":"Dukascopy","long_pct":70.66}],"coverage":1,"average_long_pct":70.66,"spread_pct":0.0,"positions":0},"VOW3.DEEUR":{"sources":[{"source":"Dukascopy","long_pct":73.32}],"coverage":1,"average_long_pct":73.32,"spread_pct":0.0,"positions":0},"VST.USUSD":{"sources":[{"source":"Dukascopy","long_pct":72.82}],"coverage":1,"average_long_pct":72.82,"spread_pct":0.0,"positions":0},"VXX.USUSD":{"sources":[{"source":"Dukascopy","long_pct":52.65}],"coverage":1,"average_long_pct":52.65,"spread_pct":0.0,"positions":0},"VZ.USUSD":{"sources":[{"source":"Dukascopy","long_pct":74.75}],"coverage":1,"average_long_pct":74.75,"spread_pct":0.0,"positions":0},"WDC.USUSD":{"sources":[{"source":"Dukascopy","long_pct":74.31}],"coverage":1,"average_long_pct":74.31,"spread_pct":0.0,"positions":0},"WMT.USUSD":{"sources":[{"source":"Dukascopy","long_pct":70.85}],"coverage":1,"average_long_pct":70.85,"spread_pct":0.0,"positions":0},"XAGAUD":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":1,"lots":0.01}],"coverage":1,"average_long_pct":100.0,"spread_pct":0.0,"positions":1,"prices":{"avg_long_price":91.464,"avg_short_price":0.0,"rate":91.85,"decimals":3,"long_pips":38.6,"short_pips":null,"long_move_pct":0.422,"short_move_pct":null,"source":"MyFxBook"}},"XAGCHF":{"sources":[{"source":"Dukascopy","long_pct":71.71}],"coverage":1,"average_long_pct":71.71,"spread_pct":0.0,"positions":0},"XAGEUR":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":42,"lots":0.82},{"source":"Dukascopy","long_pct":51.64}],"coverage":2,"average_long_pct":75.82,"spread_pct":48.36,"positions":42,"prices":{"avg_long_price":62.9931,"avg_short_price":0.0,"rate":57.0,"decimals":3,"long_pips":-599.3,"short_pips":null,"long_move_pct":-9.514,"short_move_pct":null,"source":"MyFxBook"}},"XAGJPY":{"sources":[{"source":"Dukascopy","long_pct":72.09}],"coverage":1,"average_long_pct":72.09,"spread_pct":0.0,"positions":0},"XAGPLN":{"sources":[{"source":"Dukascopy","long_pct":71.69}],"coverage":1,"average_long_pct":71.69,"spread_pct":0.0,"positions":0},"XAGTRY":{"sources":[{"source":"Dukascopy","long_pct":70.05}],"coverage":1,"average_long_pct":70.05,"spread_pct":0.0,"positions":0},"XAGUSD":{"sources":[{"source":"Dukascopy","long_pct":70.44},{"source":"MyFxBook","long_pct":54.68,"positions":1332,"lots":283.23}],"coverage":2,"average_long_pct":62.56,"spread_pct":15.76,"positions":1332,"prices":{"avg_long_price":76.5245,"avg_short_price":59.7712,"rate":66.2,"decimals":2,"long_pips":-1032.5,"short_pips":-642.9,"long_move_pct":-13.492,"short_move_pct":-10.756,"source":"MyFxBook"}},"XAUAUD":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":11,"lots":0.11}],"coverage":1,"average_long_pct":100.0,"spread_pct":0.0,"positions":11,"prices":{"avg_long_price":6164.7882,"avg_short_price":0.0,"rate":6142.4,"decimals":2,"long_pips":-2238.8,"short_pips":null,"long_move_pct":-0.363,"short_move_pct":null,"source":"MyFxBook"}},"XAUCHF":{"sources":[{"source":"MyFxBook","long_pct":95.35,"positions":18,"lots":0.43},{"source":"Dukascopy","long_pct":62.5}],"coverage":2,"average_long_pct":78.92,"spread_pct":32.85,"positions":18,"prices":{"avg_long_price":3786.9365,"avg_short_price":2184.36,"rate":1770.7,"decimals":2,"long_pips":-201623.6,"short_pips":41366.0,"long_move_pct":-53.242,"short_move_pct":18.937,"source":"MyFxBook"}},"XAUEUR":{"sources":[{"source":"MyFxBook","long_pct":95.02,"positions":67,"lots":4.22},{"source":"Dukascopy","long_pct":57.32}],"coverage":2,"average_long_pct":76.17,"spread_pct":37.7,"positions":67,"prices":{"avg_long_price":4049.6812,"avg_short_price":3810.7214,"rate":3815.21,"decimals":2,"long_pips":-23447.1,"short_pips":-448.9,"long_move_pct":-5.79,"short_move_pct":-0.118,"source":"MyFxBook"}},"XAUGBP":{"sources":[{"source":"MyFxBook","long_pct":43.33,"positions":15,"lots":0.3}],"coverage":1,"average_long_pct":43.33,"spread_pct":0.0,"positions":15,"prices":{"avg_long_price":3286.6823,"avg_short_price":3263.42,"rate":3274.0,"decimals":2,"long_pips":-1268.2,"short_pips":-1058.0,"long_move_pct":-0.386,"short_move_pct":-0.324,"source":"MyFxBook"}},"XAUJPY":{"sources":[{"source":"MyFxBook","long_pct":78.09,"positions":60,"lots":6.39},{"source":"Dukascopy","long_pct":70.87}],"coverage":2,"average_long_pct":74.48,"spread_pct":7.22,"positions":60,"prices":{"avg_long_price":698351.963,"avg_short_price":671631.5152,"rate":692128.0,"decimals":5,"long_pips":-6224.0,"short_pips":-20496.5,"long_move_pct":-0.891,"short_move_pct":-3.052,"source":"MyFxBook"}},"XAUPLN":{"sources":[{"source":"Dukascopy","long_pct":73.43}],"coverage":1,"average_long_pct":73.43,"spread_pct":0.0,"positions":0},"XAUUSD":{"sources":[{"source":"Dukascopy","long_pct":73.32},{"source":"MyFxBook","long_pct":49.54,"positions":13398,"lots":1780.09}],"coverage":2,"average_long_pct":61.43,"spread_pct":23.78,"positions":13398,"prices":{"avg_long_price":4565.3927,"avg_short_price":4183.4765,"rate":4429.91,"decimals":2,"long_pips":-13548.3,"short_pips":-24643.4,"long_move_pct":-2.968,"short_move_pct":-5.891,"source":"MyFxBook"}},"XLE.USUSD":{"sources":[{"source":"Dukascopy","long_pct":74.62}],"coverage":1,"average_long_pct":74.62,"spread_pct":0.0,"positions":0},"XLF.USUSD":{"sources":[{"source":"Dukascopy","long_pct":71.61}],"coverage":1,"average_long_pct":71.61,"spread_pct":0.0,"positions":0},"XLI.USUSD":{"sources":[{"source":"Dukascopy","long_pct":28.3}],"coverage":1,"average_long_pct":28.3,"spread_pct":0.0,"positions":0},"XLK.USUSD":{"sources":[{"source":"Dukascopy","long_pct":72.53}],"coverage":1,"average_long_pct":72.53,"spread_pct":0.0,"positions":0},"XLMUSD":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":1,"lots":0.3},{"source":"Dukascopy","long_pct":71.4}],"coverage":2,"average_long_pct":85.7,"spread_pct":28.6,"positions":1,"prices":{"avg_long_price":0.51,"avg_short_price":0.0,"rate":0.18,"decimals":2,"long_pips":-33.0,"short_pips":null,"long_move_pct":-64.706,"short_move_pct":null,"source":"MyFxBook"}},"XLP.USUSD":{"sources":[{"source":"Dukascopy","long_pct":70.7}],"coverage":1,"average_long_pct":70.7,"spread_pct":0.0,"positions":0},"XLU.USUSD":{"sources":[{"source":"Dukascopy","long_pct":71.51}],"coverage":1,"average_long_pct":71.51,"spread_pct":0.0,"positions":0},"XLV.USUSD":{"sources":[{"source":"Dukascopy","long_pct":70.61}],"coverage":1,"average_long_pct":70.61,"spread_pct":0.0,"positions":0},"XMRUSD":{"sources":[{"source":"MyFxBook","long_pct":85.71,"positions":5,"lots":0.07}],"coverage":1,"average_long_pct":85.71,"spread_pct":0.0,"positions":5,"prices":{"avg_long_price":161.4225,"avg_short_price":157.93,"rate":528.01,"decimals":2,"long_pips":36658.8,"short_pips":-37008.0,"long_move_pct":227.098,"short_move_pct":-234.332,"source":"MyFxBook"}},"XPD.CMDUSD":{"sources":[{"source":"Dukascopy","long_pct":71.82}],"coverage":1,"average_long_pct":71.82,"spread_pct":0.0,"positions":0},"XPDUSD":{"sources":[{"source":"MyFxBook","long_pct":91.67,"positions":12,"lots":0.12}],"coverage":1,"average_long_pct":91.67,"spread_pct":0.0,"positions":12,"prices":{"avg_long_price":1201.23,"avg_short_price":1217.77,"rate":1387.65,"decimals":2,"long_pips":18642.0,"short_pips":-16988.0,"long_move_pct":15.519,"short_move_pct":-13.95,"source":"MyFxBook"}},"XPEV.USUSD":{"sources":[{"source":"Dukascopy","long_pct":74.25}],"coverage":1,"average_long_pct":74.25,"spread_pct":0.0,"positions":0},"XPT.CMDUSD":{"sources":[{"source":"Dukascopy","long_pct":70.74}],"coverage":1,"average_long_pct":70.74,"spread_pct":0.0,"positions":0},"XPTUSD":{"sources":[{"source":"MyFxBook","long_pct":51.11,"positions":29,"lots":18.84}],"coverage":1,"average_long_pct":51.11,"spread_pct":0.0,"positions":29,"prices":{"avg_long_price":1871.023,"avg_short_price":1279.4363,"rate":1819.34,"decimals":2,"long_pips":-5168.3,"short_pips":-53990.4,"long_move_pct":-2.762,"short_move_pct":-42.199,"source":"MyFxBook"}},"XRPUSD":{"sources":[{"source":"MyFxBook","long_pct":93.98,"positions":58,"lots":24.6}],"coverage":1,"average_long_pct":93.98,"spread_pct":0.0,"positions":58,"prices":{"avg_long_price":1.8679,"avg_short_price":1.5907,"rate":1.4,"decimals":2,"long_pips":-46.8,"short_pips":19.1,"long_move_pct":-25.05,"short_move_pct":11.988,"source":"MyFxBook"}},"XTZUSD":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":2,"lots":0.7}],"coverage":1,"average_long_pct":100.0,"spread_pct":0.0,"positions":2,"prices":{"avg_long_price":0.5,"avg_short_price":0.0,"rate":0.0,"decimals":5,"long_pips":null,"short_pips":null,"long_move_pct":null,"short_move_pct":null,"source":"MyFxBook"}},"YFIUSD":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":1,"lots":0.1},{"source":"Dukascopy","long_pct":70.62}],"coverage":2,"average_long_pct":85.31,"spread_pct":29.38,"positions":1,"prices":{"avg_long_price":1956.0,"avg_short_price":0.0,"rate":2284.0,"decimals":5,"long_pips":328.0,"short_pips":null,"long_move_pct":16.769,"short_move_pct":null,"source":"MyFxBook"}},"ZARJPY":{"sources":[{"source":"Dukascopy","long_pct":73.5},{"source":"MyFxBook","long_pct":8.26,"positions":11,"lots":2.18}],"coverage":2,"average_long_pct":40.88,"spread_pct":65.24,"positions":11,"prices":{"avg_long_price":9.9088,"avg_short_price":9.5485,"rate":9.781,"decimals":3,"long_pips":-12.8,"short_pips":-23.2,"long_move_pct":-1.29,"short_move_pct":-2.435,"source":"MyFxBook"}},"ZECUSD":{"sources":[{"source":"MyFxBook","long_pct":57.31,"positions":25,"lots":26.28}],"coverage":1,"average_long_pct":57.31,"spread_pct":0.0,"positions":25,"prices":{"avg_long_price":830.7432,"avg_short_price":500.585,"rate":1019.49,"decimals":2,"long_pips":18874.7,"short_pips":-51890.5,"long_move_pct":22.72,"short_move_pct":-103.66,"source":"MyFxBook"}},"ZILUSD":{"sources":[{"source":"MyFxBook","long_pct":100.0,"positions":10,"lots":0.1}],"coverage":1,"average_long_pct":100.0,"spread_pct":0.0,"positions":10,"prices":{"avg_long_price":0.0,"avg_short_price":0.0,"rate":0.0,"decimals":5,"long_pips":null,"short_pips":null,"long_move_pct":null,"short_move_pct":null,"source":"MyFxBook"}},"ZRXUSD":{"sources":[{"source":"MyFxBook","long_pct":0.0,"positions":2,"lots":0.02}],"coverage":1,"average_long_pct":0.0,"spread_pct":0.0,"positions":2,"prices":{"avg_long_price":0.0,"avg_short_price":0.1228,"rate":0.10449,"decimals":5,"long_pips":null,"short_pips":183.1,"long_move_pct":null,"short_move_pct":14.91,"source":"MyFxBook"}},"ZTS.USUSD":{"sources":[{"source":"Dukascopy","long_pct":71.21}],"coverage":1,"average_long_pct":71.21,"spread_pct":0.0,"positions":0}}}</script>
+<script>
+"use strict";
+const DATA = JSON.parse(document.getElementById("payload").textContent);
+const MIN_POSITIONS = 250;          // books thinner than this print 100%/0% noise
+
+const pct  = v => v.toFixed(2) + "%";
+const px   = (v,d) => v == null ? "—" : v.toFixed(Math.max(2,(d||5)-1));
+const sgn  = (v,u,dp=0) => v == null ? "—" : (v>=0?"+":"") + v.toFixed(dp) + u;
+const esc  = s => String(s).replace(/[&<>"]/g, c =>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+/* ── model ─────────────────────────────────────────────────────────────── */
+const ROWS = Object.entries(DATA.symbols)
+  .filter(([,v]) => v.coverage > 1 && (v.positions||0) >= MIN_POSITIONS)
+  .map(([s,v]) => {
+    const by = Object.fromEntries(v.sources.map(e => [e.source, e.long_pct]));
+    const mean = v.average_long_pct;
+    const p = v.prices || null;
+    return {
+      s, v, p,
+      mfb: by.MyFxBook ?? null, duk: by.Dukascopy ?? null,
+      mean, spread: v.spread_pct, pos: v.positions || 0,
+      skew: Math.abs(mean - 50),                       // how one-sided
+      long: mean > 50,
+      pnl: p ? (mean > 50 ? p.long_move_pct : p.short_move_pct) : null,
+      trapped: p ? (p.long_pips < 0 && p.short_pips < 0) : false,
+    };
+  });
+
+let sortMode = "skew", query = "", selected =
+  ROWS.some(r => r.s === "EURUSD") ? "EURUSD" : (ROWS[0]||{}).s;
+let tableKey = "skew", tableDir = -1;
+
+const sorters = {
+  skew:      (a,b) => b.skew - a.skew,
+  long:      (a,b) => b.mean - a.mean,
+  disagree:  (a,b) => b.spread - a.spread,
+  name:      (a,b) => a.s.localeCompare(b.s),
+};
+
+/* ── header ── */
+document.getElementById("sub").innerHTML =
+  `Collected <b>${esc(new Date(DATA.captured_utc).toUTCString().replace("GMT","UTC"))}</b>`
+  + ` · ${Object.keys(DATA.source_meta).length} live sources`
+  + ` · ${ROWS.length} pairs covered by both`;
+
+/* theme toggle: an explicit stamp must beat the OS setting in both directions */
+document.getElementById("themer").addEventListener("click", () => {
+  const now = document.documentElement.getAttribute("data-theme");
+  const dark = now ? now === "dark"
+    : matchMedia("(prefers-color-scheme: dark)").matches;
+  document.documentElement.setAttribute("data-theme", dark ? "light" : "dark");
+});
+
+/* ── tooltip ── */
+const tip = document.getElementById("tip");
+function showTip(html, ev){
+  tip.innerHTML = html; tip.style.opacity = 1;
+  const pad = 14, w = tip.offsetWidth, h = tip.offsetHeight;
+  let x = ev.clientX + pad, y = ev.clientY + pad;
+  if (x + w > innerWidth - 8)  x = ev.clientX - w - pad;
+  if (y + h > innerHeight - 8) y = ev.clientY - h - pad;
+  tip.style.left = x + "px"; tip.style.top = y + "px";
+}
+const hideTip = () => { tip.style.opacity = 0; };
+
+function tipFor(r){
+  const p = r.p;
+  return `<b>${esc(r.s)}</b>`
+    + `<div class="r"><span>Long</span><span>${pct(r.mean)}</span></div>`
+    + `<div class="r"><span>Short</span><span>${pct(100-r.mean)}</span></div>`
+    + `<div class="r"><span>MyFxBook / Dukascopy</span><span>${pct(r.mfb)} / ${pct(r.duk)}</span></div>`
+    + `<div class="r"><span>Disagreement</span><span>${r.spread.toFixed(2)}pp</span></div>`
+    + (p ? `<div class="r"><span>Avg long / short</span><span>${px(p.avg_long_price,p.decimals)} / ${px(p.avg_short_price,p.decimals)}</span></div>` : "")
+    + `<div class="r"><span>Open positions</span><span>${r.pos.toLocaleString()}</span></div>`;
+}
+
+/* ── a 100% stacked long/short bar ── */
+function bar(longPct, showLabels, height){
+  const short = 100 - longPct;
+  const lab = (v, side) =>
+    showLabels && v > 17 ? `<span>${v.toFixed(showLabels === 2 ? 2 : 0)}%</span>` : "";
+  return `<div class="track"${height ? ` style="height:${height}px"` : ""}>`
+       +   `<div class="l" style="width:calc(${longPct}% - 1px)">${lab(longPct,showLabels)}</div>`
+       +   `<div class="s">${lab(short,showLabels)}</div>`
+       +   `<div class="mid"></div>`
+       + `</div>`;
+}
+
+/* ── KPI strip ── */
+function renderKpis(){
+  if (!ROWS.length) return;
+  const byLong  = [...ROWS].sort((a,b) => b.mean - a.mean);
+  const mostLong = byLong[0], mostShort = byLong[byLong.length-1];
+  const widest  = [...ROWS].sort((a,b) => b.spread - a.spread)[0];
+  const trapped = ROWS.filter(r => r.trapped);
+
+  const tile = (k,v,d) => `<div class="card kpi"><div class="k">${k}</div>
+      <div class="v num">${v}</div><div class="d">${d}</div></div>`;
+
+  document.getElementById("kpis").innerHTML =
+      tile("Most crowded long", `${mostLong.mean.toFixed(1)}%`,
+           `<em>${esc(mostLong.s)}</em> — crowd ${mostLong.pnl!=null?sgn(mostLong.pnl,"%",2):"—"}`)
+    + tile("Most crowded short", `${(100-mostShort.mean).toFixed(1)}%`,
+           `<em>${esc(mostShort.s)}</em> — crowd ${mostShort.pnl!=null?sgn(mostShort.pnl,"%",2):"—"}`)
+    + tile("Widest disagreement", `${widest.spread.toFixed(1)}pp`,
+           `<em>${esc(widest.s)}</em> — ${pct(widest.mfb)} vs ${pct(widest.duk)}`)
+    + tile("Both sides underwater", `${trapped.length}`,
+           `of ${ROWS.length} pairs — price between both averages`);
+}
+
+/* ── bar list ── */
+function renderBars(){
+  const rows = ROWS
+    .filter(r => !query || r.s.includes(query))
+    .sort(sorters[sortMode]);
+
+  document.getElementById("bars").innerHTML = rows.map(r => `
+    <div class="brow${r.s === selected ? " on" : ""}" data-s="${esc(r.s)}">
+      <div class="sym">${esc(r.s)}</div>
+      ${bar(r.mean, 1)}
+      <div class="bend num">${r.long ? pct(r.mean) : pct(100-r.mean)}
+        <span style="color:var(--muted)">${r.long ? "L" : "S"}</span></div>
+    </div>`).join("") || `<div class="sub">No pair matches “${esc(query)}”.</div>`;
+
+  document.querySelectorAll(".brow").forEach(el => {
+    const r = ROWS.find(x => x.s === el.dataset.s);
+    el.addEventListener("mousemove", ev => showTip(tipFor(r), ev));
+    el.addEventListener("mouseleave", hideTip);
+    el.addEventListener("click", () => { selected = r.s; renderDetail(); renderBars(); });
+  });
+}
+
+/* ── selected-pair detail ── */
+function renderDetail(){
+  const r = ROWS.find(x => x.s === selected);
+  document.getElementById("detailSym").textContent = r ? "— " + r.s : "";
+  if (!r){ document.getElementById("detail").innerHTML = ""; return; }
+
+  const meth = s => (DATA.source_meta[s]||{}).method || "";
+  const line = (name, sub, val) => `
+    <div class="drow">
+      <div class="who"><b>${esc(name)}</b><i>${esc(sub)}</i></div>
+      ${bar(val, 2, 24)}
+      <div class="bend num">${val > 50 ? "net long" : "net short"}</div>
+    </div>`;
+
+  let html = r.v.sources
+    .slice().sort((a,b) => b.long_pct - a.long_pct)
+    .map(e => line(e.source, meth(e.source), e.long_pct)).join("")
+    + `<div class="dsep"></div>`
+    + line("Average", `mean of ${r.v.coverage} · ±${r.spread.toFixed(2)}pp`, r.mean);
+
+  const p = r.p;
+  if (p){
+    const d = p.decimals;
+    const side = (ok, pips, mv) =>
+      `<div class="d ${ok?"up":"down"} num">${sgn(pips," pips")} · ${sgn(mv,"%",2)}</div>`;
+    html += `
+      <div class="tiles">
+        <div class="tile l"><div class="k">Avg long entry</div>
+          <div class="v num">${px(p.avg_long_price,d)}</div>${side(p.long_pips>=0,p.long_pips,p.long_move_pct)}</div>
+        <div class="tile r"><div class="k">Current rate</div>
+          <div class="v num">${px(p.rate,d)}</div><div class="d" style="color:var(--muted)">${esc(p.source)}</div></div>
+        <div class="tile s"><div class="k">Avg short entry</div>
+          <div class="v num">${px(p.avg_short_price,d)}</div>${side(p.short_pips>=0,p.short_pips,p.short_move_pct)}</div>
+      </div>
+      <div class="verdict">${verdict(r, p)}</div>`;
+  } else {
+    html += `<div class="verdict">No average entry prices for ${esc(r.s)} —
+             only MyFxBook publishes them, and it does not cover this symbol.</div>`;
+  }
+  document.getElementById("detail").innerHTML = html;
+}
+
+function verdict(r, p){
+  const lu = p.long_pips >= 0, su = p.short_pips >= 0;
+  const crowd = r.long ? "long" : "short";
+  const crowdOk = r.long ? lu : su;
+  if (!lu && !su){
+    const worse = Math.abs(p.long_pips) > Math.abs(p.short_pips) ? "longs" : "shorts";
+    return `<b>Both sides underwater.</b> Price sits between the two average entries,
+      so longs and shorts are each holding a loss — ${worse} the heavier. The
+      ${crowd} side is the crowd (${pct(r.long ? r.mean : 100-r.mean)} of the book),
+      which is the side with more to unwind.`;
+  }
+  if (lu && su)
+    return `<b>Both sides in profit.</b> Unusual — the averages straddle a range
+      price has just left, so neither side is trapped.`;
+  return `<b>The crowd is ${crowdOk ? "onside" : "offside"}.</b>
+    ${pct(r.long ? r.mean : 100-r.mean)} of the book is ${crowd}, and that side is
+    ${sgn(r.long ? p.long_move_pct : p.short_move_pct, "%", 2)} from its average entry.
+    ${crowdOk ? "No squeeze pressure building." :
+      "A losing majority is what fuels a squeeze if price keeps running against it."}`;
+}
+
+/* ── table ── */
+const cellPnl = r => r.pnl == null ? "—"
+  : `<span class="${r.pnl>=0?"up":"down"}">${sgn(r.pnl,"%",2)}</span>`;
+
+function renderTable(){
+  const rows = ROWS
+    .filter(r => !query || r.s.includes(query))
+    .sort((a,b) => {
+      const A = a[tableKey], B = b[tableKey];
+      if (typeof A === "string") return tableDir * A.localeCompare(B);
+      return tableDir * ((A ?? -Infinity) - (B ?? -Infinity));
+    });
+
+  document.getElementById("tbody").innerHTML = rows.map(r => {
+    const share = r.long ? r.mean : 100 - r.mean;
+    return `<tr data-s="${esc(r.s)}">
+      <td><b>${esc(r.s)}</b></td>
+      <td class="n num">${pct(r.mfb)}</td>
+      <td class="n num">${pct(r.duk)}</td>
+      <td class="n num">${pct(r.mean)}</td>
+      <td class="n num" ${r.spread>10?'style="color:var(--warn)"':""}>${r.spread.toFixed(2)}pp</td>
+      <td><span class="tag" style="background:${r.long?"var(--long)":"var(--short)"}">${r.long?"LONG":"SHORT"} ${share.toFixed(0)}%</span></td>
+      <td class="n num">${r.p?px(r.p.avg_long_price,r.p.decimals):"—"}</td>
+      <td class="n num">${r.p?px(r.p.avg_short_price,r.p.decimals):"—"}</td>
+      <td class="n num">${r.p?px(r.p.rate,r.p.decimals):"—"}</td>
+      <td class="n num">${cellPnl(r)}</td>
+      <td class="n num">${r.pos.toLocaleString()}</td>
+    </tr>`;
+  }).join("");
+
+  document.querySelectorAll("#tbody tr").forEach(tr =>
+    tr.addEventListener("click", () => {
+      selected = tr.dataset.s; renderDetail(); renderBars();
+      document.querySelector(".cols").scrollIntoView({behavior:"smooth", block:"start"});
+    }));
+}
+
+document.querySelectorAll("th[data-k]").forEach(th =>
+  th.addEventListener("click", () => {
+    const k = th.dataset.k;
+    tableDir = tableKey === k ? -tableDir : (k === "s" ? 1 : -1);
+    tableKey = k; renderTable();
+  }));
+
+/* ── controls ── */
+document.getElementById("q").addEventListener("input", e => {
+  query = e.target.value.trim().toUpperCase();
+  renderBars(); renderTable();
+});
+document.querySelectorAll(".chip[data-sort]").forEach(b =>
+  b.addEventListener("click", () => {
+    sortMode = b.dataset.sort;
+    document.querySelectorAll(".chip[data-sort]")
+      .forEach(x => x.setAttribute("aria-pressed", String(x === b)));
+    renderBars();
+  }));
+
+document.getElementById("note").innerHTML = `
+  <b>Method.</b> Every figure is fetched live and computed here — nothing hard-coded.
+  <code>long %</code> is the share of open interest positioned long; short is its
+  complement. <b>MyFxBook</b> is volume-weighted from raw lot totals
+  (<code>long_lots / (long_lots + short_lots)</code>), which carries two real decimals
+  rather than the rounded integer the page prints. <b>Dukascopy</b> is the SWFX
+  Sentiment Index (<code>liquidity=consumers</code>, ~30 min refresh). Average entry
+  prices and rate come from MyFxBook only — Dukascopy publishes ratios alone.
+  Pairs with fewer than ${MIN_POSITIONS} open positions are excluded: thin books print
+  100%/0% and would dominate every ranking.
+  <br><br>
+  <b>Read the disagreement column.</b> Two honest brokers can differ by 15–40pp on the
+  same pair at the same minute, because their client bases differ. A wide spread means
+  "retail sentiment" is not one number, and any single-broker reading deserves suspicion.
+  <br><br>
+  <b>Refresh.</b> This page rebuilds automatically every day at
+  <b>08:00 Asia/Bangkok</b> (01:00 UTC) and republishes itself. The timestamp at the
+  top is the moment the data was actually fetched, not the moment you loaded the page.`;
+
+renderKpis(); renderDetail(); renderBars(); renderTable();
+</script>
+</body>
+</html>
